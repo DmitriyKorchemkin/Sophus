@@ -102,6 +102,7 @@ class SE3Base {
   typedef Eigen::Matrix<Scalar, 3, 1> Point;
   typedef Eigen::Matrix<Scalar, DoF, 1> Tangent;
   typedef Eigen::Matrix<Scalar, DoF, DoF> Adjoint;
+  typedef Eigen::ParametrizedLine<Scalar, 3> Line;
 
   // Adjoint transformation
   //
@@ -238,6 +239,10 @@ class SE3Base {
   //
   SOPHUS_FUNC Point operator*(const Point& p) const {
     return so3() * p + translation();
+  }
+
+  SOPHUS_FUNC Line operator*(const Line& l) const {
+    return Line((*this) * l.origin(), so3() * l.direction());
   }
 
   // In-place group multiplication.
