@@ -661,6 +661,14 @@ class Map<const Sophus::SO3<_Scalar>, _Options>
   //
   const Map<const Eigen::Quaternion<Scalar>, _Options> unit_quaternion_;
 };
+
+
+template <typename Derived>
+typename Sophus::SO3Base<Derived>::Point operator/(const typename Sophus::SO3Base<Derived>::Point &pt, const Sophus::SO3Base<Derived> &so3)
+{
+  return so3.unit_quaternion().conjugate() * pt;
+}
+
 }
 
 #endif

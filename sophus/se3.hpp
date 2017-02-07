@@ -770,6 +770,12 @@ class Map<const Sophus::SE3<_Scalar>, _Options>
   const Map<const Sophus::SO3<Scalar>, _Options> so3_;
   const Map<const Eigen::Matrix<Scalar, 3, 1>, _Options> translation_;
 };
+
+template <typename Derived>
+typename Sophus::SE3Base<Derived>::Point operator/(const typename Sophus::SE3Base<Derived>::Point &pt, const Sophus::SE3Base<Derived> &se3)
+{
+  return (pt - se3.translation()) / se3.so3();
+}
 }
 
 #endif
