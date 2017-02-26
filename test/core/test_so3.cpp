@@ -1,27 +1,6 @@
-// This file is part of Sophus.
-//
-// Copyright 2012-2013 Hauke Strasdat
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to
-// deal in the Software without restriction, including without limitation the
-// rights  to use, copy, modify, merge, publish, distribute, sublicense, and/or
-// sell copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-// IN THE SOFTWARE.
-
 #include <iostream>
 
+#include <sophus/interpolate.hpp>
 #include <sophus/so3.hpp>
 #include "tests.hpp"
 
@@ -29,7 +8,7 @@
 // get compiled and for code coverage analysis.
 namespace Eigen {
 template class Map<Sophus::SO3<double>>;
-template class Map<const Sophus::SO3<double>>;
+template class Map<Sophus::SO3<double> const>;
 }
 
 namespace Sophus {
@@ -42,32 +21,32 @@ class Tests {
   using SO3Type = SO3<Scalar>;
   using Point = typename SO3<Scalar>::Point;
   using Tangent = typename SO3<Scalar>::Tangent;
-  const Scalar PI = Constants<Scalar>::pi();
+  Scalar const kPi = Constants<Scalar>::pi();
 
   Tests() {
-    so3_vec.push_back(SO3Type(Eigen::Quaternion<Scalar>(0.1e-11, 0., 1., 0.)));
-    so3_vec.push_back(
+    so3_vec_.push_back(SO3Type(Eigen::Quaternion<Scalar>(0.1e-11, 0., 1., 0.)));
+    so3_vec_.push_back(
         SO3Type(Eigen::Quaternion<Scalar>(-1, 0.00001, 0.0, 0.0)));
-    so3_vec.push_back(SO3Type::exp(Point(0.2, 0.5, 0.0)));
-    so3_vec.push_back(SO3Type::exp(Point(0.2, 0.5, -1.0)));
-    so3_vec.push_back(SO3Type::exp(Point(0., 0., 0.)));
-    so3_vec.push_back(SO3Type::exp(Point(0., 0., 0.00001)));
-    so3_vec.push_back(SO3Type::exp(Point(PI, 0, 0)));
-    so3_vec.push_back(SO3Type::exp(Point(0.2, 0.5, 0.0)) *
-                      SO3Type::exp(Point(PI, 0, 0)) *
-                      SO3Type::exp(Point(-0.2, -0.5, -0.0)));
-    so3_vec.push_back(SO3Type::exp(Point(0.3, 0.5, 0.1)) *
-                      SO3Type::exp(Point(PI, 0, 0)) *
-                      SO3Type::exp(Point(-0.3, -0.5, -0.1)));
-    tangent_vec.push_back(Tangent(0, 0, 0));
-    tangent_vec.push_back(Tangent(1, 0, 0));
-    tangent_vec.push_back(Tangent(0, 1, 0));
-    tangent_vec.push_back(Tangent(PI / 2., PI / 2., 0.0));
-    tangent_vec.push_back(Tangent(-1, 1, 0));
-    tangent_vec.push_back(Tangent(20, -1, 0));
-    tangent_vec.push_back(Tangent(30, 5, -1));
+    so3_vec_.push_back(SO3Type::exp(Point(0.2, 0.5, 0.0)));
+    so3_vec_.push_back(SO3Type::exp(Point(0.2, 0.5, -1.0)));
+    so3_vec_.push_back(SO3Type::exp(Point(0., 0., 0.)));
+    so3_vec_.push_back(SO3Type::exp(Point(0., 0., 0.00001)));
+    so3_vec_.push_back(SO3Type::exp(Point(kPi, 0, 0)));
+    so3_vec_.push_back(SO3Type::exp(Point(0.2, 0.5, 0.0)) *
+                       SO3Type::exp(Point(kPi, 0, 0)) *
+                       SO3Type::exp(Point(-0.2, -0.5, -0.0)));
+    so3_vec_.push_back(SO3Type::exp(Point(0.3, 0.5, 0.1)) *
+                       SO3Type::exp(Point(kPi, 0, 0)) *
+                       SO3Type::exp(Point(-0.3, -0.5, -0.1)));
+    tangent_vec_.push_back(Tangent(0, 0, 0));
+    tangent_vec_.push_back(Tangent(1, 0, 0));
+    tangent_vec_.push_back(Tangent(0, 1, 0));
+    tangent_vec_.push_back(Tangent(kPi / 2., kPi / 2., 0.0));
+    tangent_vec_.push_back(Tangent(-1, 1, 0));
+    tangent_vec_.push_back(Tangent(20, -1, 0));
+    tangent_vec_.push_back(Tangent(30, 5, -1));
 
-    point_vec.push_back(Point(1, 2, 4));
+    point_vec_.push_back(Point(1, 2, 4));
   }
 
   void runAll() {
@@ -80,10 +59,7 @@ class Tests {
 
  private:
   bool testLieProperties() {
-    GenericTests<SO3Type> tests;
-    tests.setGroupElements(so3_vec);
-    tests.setTangentVectors(tangent_vec);
-    tests.setPoints(point_vec);
+    LieGroupTests<SO3Type> tests(so3_vec_, tangent_vec_, point_vec_);
     return tests.doAllTestsPass();
   }
 
@@ -92,7 +68,7 @@ class Tests {
     // Test that the complex number magnitude stays close to one.
     SO3Type current_q;
     for (std::size_t i = 0; i < 1000; ++i) {
-      for (const auto& q : so3_vec) {
+      for (SO3Type const& q : so3_vec_) {
         current_q *= q;
       }
     }
@@ -104,32 +80,33 @@ class Tests {
   bool testRawDataAcces() {
     bool passed = true;
     Eigen::Matrix<Scalar, 4, 1> raw = {0, 1, 0, 0};
-    Eigen::Map<const SO3Type> const_so3_map(raw.data());
-    SOPHUS_TEST_APPROX(passed, const_so3_map.unit_quaternion().coeffs().eval(),
-                       raw, Constants<Scalar>::epsilon());
-    SOPHUS_TEST_EQUAL(passed, const_so3_map.unit_quaternion().coeffs().data(),
-                      raw.data());
-    Eigen::Map<const SO3Type> const_shallow_copy = const_so3_map;
+    Eigen::Map<SO3Type const> map_of_const_so3(raw.data());
+    SOPHUS_TEST_APPROX(passed,
+                       map_of_const_so3.unit_quaternion().coeffs().eval(), raw,
+                       Constants<Scalar>::epsilon());
+    SOPHUS_TEST_EQUAL(
+        passed, map_of_const_so3.unit_quaternion().coeffs().data(), raw.data());
+    Eigen::Map<SO3Type const> const_shallow_copy = map_of_const_so3;
     SOPHUS_TEST_EQUAL(passed,
                       const_shallow_copy.unit_quaternion().coeffs().eval(),
-                      const_so3_map.unit_quaternion().coeffs().eval());
+                      map_of_const_so3.unit_quaternion().coeffs().eval());
 
     Eigen::Matrix<Scalar, 4, 1> raw2 = {1, 0, 0, 0};
-    Eigen::Map<SO3Type> so3_map(raw.data());
+    Eigen::Map<SO3Type> map_of_so3(raw.data());
     Eigen::Quaternion<Scalar> quat;
     quat.coeffs() = raw2;
-    so3_map.setQuaternion(quat);
-    SOPHUS_TEST_APPROX(passed, so3_map.unit_quaternion().coeffs().eval(), raw2,
-                       Constants<Scalar>::epsilon());
-    SOPHUS_TEST_EQUAL(passed, so3_map.unit_quaternion().coeffs().data(),
+    map_of_so3.setQuaternion(quat);
+    SOPHUS_TEST_APPROX(passed, map_of_so3.unit_quaternion().coeffs().eval(),
+                       raw2, Constants<Scalar>::epsilon());
+    SOPHUS_TEST_EQUAL(passed, map_of_so3.unit_quaternion().coeffs().data(),
                       raw.data());
-    SOPHUS_TEST_NEQ(passed, so3_map.unit_quaternion().coeffs().data(),
+    SOPHUS_TEST_NEQ(passed, map_of_so3.unit_quaternion().coeffs().data(),
                     quat.coeffs().data());
-    Eigen::Map<SO3Type> shallow_copy = so3_map;
+    Eigen::Map<SO3Type> shallow_copy = map_of_so3;
     SOPHUS_TEST_EQUAL(passed, shallow_copy.unit_quaternion().coeffs().eval(),
-                      so3_map.unit_quaternion().coeffs().eval());
+                      map_of_so3.unit_quaternion().coeffs().eval());
 
-    const SO3Type const_so3(quat);
+    SO3Type const const_so3(quat);
     for (int i = 0; i < 4; ++i) {
       SOPHUS_TEST_EQUAL(passed, const_so3.data()[i], raw2.data()[i]);
     }
@@ -147,15 +124,15 @@ class Tests {
 
   bool testConstructors() {
     bool passed = true;
-    Eigen::Matrix<Scalar, 3, 3> R = so3_vec.front().matrix();
+    Matrix3<Scalar> R = so3_vec_.front().matrix();
     SO3Type so3(R);
     SOPHUS_TEST_APPROX(passed, R, so3.matrix(), Constants<Scalar>::epsilon());
     return passed;
   }
 
-  std::vector<SO3Type, Eigen::aligned_allocator<SO3Type>> so3_vec;
-  std::vector<Tangent, Eigen::aligned_allocator<Tangent>> tangent_vec;
-  std::vector<Point, Eigen::aligned_allocator<Point>> point_vec;
+  std::vector<SO3Type, Eigen::aligned_allocator<SO3Type>> so3_vec_;
+  std::vector<Tangent, Eigen::aligned_allocator<Tangent>> tangent_vec_;
+  std::vector<Point, Eigen::aligned_allocator<Point>> point_vec_;
 };
 
 int test_so3() {
