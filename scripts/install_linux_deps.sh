@@ -13,7 +13,7 @@ wget http://ceres-solver.org/ceres-solver-1.12.0.tar.gz
 tar zxf ceres-solver-1.12.0.tar.gz
 mkdir ceres-bin
 cd ceres-bin
-cmake -DCMAKE_CXX_FLAGS=“-stdlib=libc++” ../ceres-solver-1.12.0 
+cmake -DCMAKE_CXX_FLAGS="-stdlib=libc++" ../ceres-solver-1.12.0 
 make -j3
 make test
 sudo make install
