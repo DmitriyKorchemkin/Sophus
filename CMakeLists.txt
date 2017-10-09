@@ -24,8 +24,8 @@ ELSEIF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
    SET(CMAKE_CXX_FLAGS_COVERAGE "${CMAKE_CXX_FLAGS_DEBUG} --coverage -fno-inline -fno-inline-small-functions -fno-default-inline")
    SET(CMAKE_EXE_LINKER_FLAGS_COVERAGE "${CMAKE_EXE_LINKER_FLAGS_DEBUG} --coverage")
    SET(CMAKE_SHARED_LINKER_FLAGS_COVERAGE "${CMAKE_SHARED_LINKER_FLAGS_DEBUG} --coverage")
-ELSEIF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
-   ADD_DEFINITIONS("-D _USE_MATH_DEFINES /wd4305 /wd4244")
+ELSEIF(CMAKE_CXX_COMPILER_ID MATCHES "^MSVC$")
+   ADD_DEFINITIONS("-D _USE_MATH_DEFINES /bigobj /wd4305 /wd4244 /MP")
 ENDIF()
 
 ################################################################################
@@ -39,13 +39,15 @@ SET( Sophus_INCLUDE_DIR ${PROJECT_SOURCE_DIR} )
 
 ################################################################################
 FIND_PACKAGE( Eigen3 REQUIRED )
-LIST( APPEND Sophus_INCLUDE_DIR ${EIGEN3_INCLUDE_DIR} )
 
 ################################################################################
 SET( SOURCE_DIR "sophus")
 
-SET( TEMPLATES so2
+SET( TEMPLATES geometry
+               so2
                se2
+               rxso2
+               sim2
                so3
                se3
                rxso3
@@ -56,6 +58,8 @@ SET( SOURCES ${SOURCE_DIR}/common.hpp
              ${SOURCE_DIR}/types.hpp
              ${SOURCE_DIR}/interpolate.hpp
              ${SOURCE_DIR}/interpolate_details.hpp
+             ${SOURCE_DIR}/rotation_matrix.hpp
+             ${SOURCE_DIR}/sim_details.hpp
              ${SOURCE_DIR}/average.hpp
              ${SOURCE_DIR}/example_ensure_handler.cpp )
 

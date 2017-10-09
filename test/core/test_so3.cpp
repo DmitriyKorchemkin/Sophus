@@ -13,7 +13,8 @@ template class Map<Sophus::SO3<double> const>;
 
 namespace Sophus {
 
-template class SO3<double>;
+template class SO3<double, Eigen::AutoAlign>;
+template class SO3<float, Eigen::DontAlign>;
 
 template <class Scalar>
 class Tests {
@@ -47,6 +48,7 @@ class Tests {
     tangent_vec_.push_back(Tangent(30, 5, -1));
 
     point_vec_.push_back(Point(1, 2, 4));
+    point_vec_.push_back(Point(1, -3, 0.5));
   }
 
   void runAll() {
@@ -119,6 +121,23 @@ class Tests {
     for (int i = 0; i < 4; ++i) {
       SOPHUS_TEST_EQUAL(passed, so3.data()[i], raw.data()[i]);
     }
+
+    SOPHUS_TEST_EQUAL(passed, SO3Type::rotX(0.2).matrix(),
+                      SO3Type::exp(Point(0.2, 0, 0)).matrix());
+    SOPHUS_TEST_EQUAL(passed, SO3Type::rotY(-0.2).matrix(),
+                      SO3Type::exp(Point(0, -0.2, 0)).matrix());
+    SOPHUS_TEST_EQUAL(passed, SO3Type::rotZ(1.1).matrix(),
+                      SO3Type::exp(Point(0, 0, 1.1)).matrix());
+
+    for (Scalar const angle : {0.0, 0.1, 0.3, -0.7}) {
+      SOPHUS_TEST_APPROX(passed, SO3Type::rotX(angle).angleX(), angle,
+                         Constants<Scalar>::epsilon());
+      SOPHUS_TEST_APPROX(passed, SO3Type::rotY(angle).angleY(), angle,
+                         Constants<Scalar>::epsilon());
+      SOPHUS_TEST_APPROX(passed, SO3Type::rotZ(angle).angleZ(), angle,
+                         Constants<Scalar>::epsilon());
+    }
+
     return passed;
   }
 
@@ -127,6 +146,15 @@ class Tests {
     Matrix3<Scalar> R = so3_vec_.front().matrix();
     SO3Type so3(R);
     SOPHUS_TEST_APPROX(passed, R, so3.matrix(), Constants<Scalar>::epsilon());
+
+    for (int i = 0; i < 100; ++i) {
+      Matrix3<Scalar> R = Matrix3<Scalar>::Random();
+      SO3Type so3 = SO3Type::fromNonOrthogonal(R);
+      SO3Type so3_2 = SO3Type::fromNonOrthogonal(so3.matrix());
+
+      SOPHUS_TEST_APPROX(passed, so3.matrix(), so3_2.matrix(),
+                         Constants<Scalar>::epsilon());
+    }
     return passed;
   }
 

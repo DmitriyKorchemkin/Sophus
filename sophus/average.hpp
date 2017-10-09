@@ -1,10 +1,12 @@
-#ifndef SOPHUS_MEAN_H
-#define SOPHUS_MEAN_H
+#ifndef SOPHUS_AVERAGE_HPP
+#define SOPHUS_AVERAGE_HPP
 
 #include "common.hpp"
+#include "rxso2.hpp"
 #include "rxso3.hpp"
 #include "se2.hpp"
 #include "se3.hpp"
+#include "sim2.hpp"
 #include "sim3.hpp"
 #include "so2.hpp"
 #include "so3.hpp"
@@ -62,6 +64,25 @@ average(SequenceContainer const& foo_Ts_bar) {
     average += w * (foo_T_average.inverse() * foo_T_bar).log();
   }
   return foo_T_average * SO2<Scalar>::exp(average);
+}
+
+// Mean implementation for RxSO(2).
+template <class SequenceContainer,
+          class Scalar = typename SequenceContainer::value_type::Scalar>
+enable_if_t<
+    std::is_same<typename SequenceContainer::value_type, RxSO2<Scalar>>::value,
+    optional<typename SequenceContainer::value_type>>
+average(SequenceContainer const& foo_Ts_bar) {
+  size_t N = std::distance(std::begin(foo_Ts_bar), std::end(foo_Ts_bar));
+  SOPHUS_ENSURE(N >= 1, "N must be >= 1.");
+  RxSO2<Scalar> foo_T_average = foo_Ts_bar.front();
+  Scalar w = Scalar(1. / N);
+
+  Vector2<Scalar> average(Scalar(0), Scalar(0));
+  for (RxSO2<Scalar> const& foo_T_bar : foo_Ts_bar) {
+    average += w * (foo_T_average.inverse() * foo_T_bar).log();
+  }
+  return foo_T_average * RxSO2<Scalar>::exp(average);
 }
 
 namespace details {
@@ -163,6 +184,15 @@ average(SequenceContainer const& foo_Ts_bar, int max_num_iterations = 20) {
 template <class SequenceContainer,
           class Scalar = typename SequenceContainer::value_type::Scalar>
 enable_if_t<
+    std::is_same<typename SequenceContainer::value_type, Sim2<Scalar>>::value,
+    optional<typename SequenceContainer::value_type>>
+average(SequenceContainer const& foo_Ts_bar, int max_num_iterations = 20) {
+  return iterativeMean(foo_Ts_bar, max_num_iterations);
+}
+
+template <class SequenceContainer,
+          class Scalar = typename SequenceContainer::value_type::Scalar>
+enable_if_t<
     std::is_same<typename SequenceContainer::value_type, SE3<Scalar>>::value,
     optional<typename SequenceContainer::value_type>>
 average(SequenceContainer const& foo_Ts_bar, int max_num_iterations = 20) {
@@ -180,4 +210,4 @@ average(SequenceContainer const& foo_Ts_bar, int max_num_iterations = 20) {
 
 }  // namespace Sophus
 
-#endif  // SOPHUS_MEAN_H
+#endif  // SOPHUS_AVERAGE_HPP

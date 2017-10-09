@@ -12,7 +12,8 @@ template class Map<Sophus::SO2<double> const>;
 
 namespace Sophus {
 
-template class SO2<double>;
+template class SO2<double, Eigen::AutoAlign>;
+template class SO2<float, Eigen::DontAlign>;
 
 template <class Scalar>
 class Tests {
@@ -41,6 +42,7 @@ class Tests {
     tangent_vec_.push_back(Tangent(kPi / 2. + 0.0001));
 
     point_vec_.push_back(Point(1, 2));
+    point_vec_.push_back(Point(1, -3));
   }
 
   void runAll() {
@@ -115,6 +117,15 @@ class Tests {
     Matrix2<Scalar> R = so2_vec_.front().matrix();
     SO2Type so2(R);
     SOPHUS_TEST_APPROX(passed, R, so2.matrix(), Constants<Scalar>::epsilon());
+
+    for (int i = 0; i < 100; ++i) {
+      Matrix2<Scalar> R = Matrix2<Scalar>::Random();
+      SO2Type so2 = SO2Type::fromNonOrthogonal(R);
+      SO2Type so2_2 = SO2Type::fromNonOrthogonal(so2.matrix());
+
+      SOPHUS_TEST_APPROX(passed, so2.matrix(), so2_2.matrix(),
+                         Constants<Scalar>::epsilon());
+    }
     return passed;
   }
 

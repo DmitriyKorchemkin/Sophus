@@ -1,6 +1,8 @@
 #ifndef SOPHUS_SO3_HPP
 #define SOPHUS_SO3_HPP
 
+#include "rotation_matrix.hpp"
+#include "so2.hpp"
 #include "types.hpp"
 
 // Include only the selective set of Eigen headers that we need.
@@ -22,7 +24,7 @@ namespace internal {
 template <class Scalar_, int Options>
 struct traits<Sophus::SO3<Scalar_, Options>> {
   using Scalar = Scalar_;
-  using QuaternionType = Eigen::Quaternion<Scalar>;
+  using QuaternionType = Eigen::Quaternion<Scalar, Options>;
 };
 
 template <class Scalar_, int Options>
@@ -80,6 +82,7 @@ class SO3Base {
   static int constexpr N = 3;
   using Transformation = Matrix<Scalar, N, N>;
   using Point = Vector3<Scalar>;
+  using Line = ParametrizedLine3<Scalar>;
   using Tangent = Vector<Scalar, DoF>;
   using Adjoint = Matrix<Scalar, DoF, DoF>;
 
@@ -92,6 +95,36 @@ class SO3Base {
   // For SO(3), it simply returns the rotation matrix corresponding to ``A``.
   //
   SOPHUS_FUNC Adjoint Adj() const { return matrix(); }
+
+  // Extract rotation angle about canonical X-axis
+  //
+  Scalar angleX() {
+    Sophus::Matrix3<Scalar> R = matrix();
+    Sophus::Matrix2<Scalar> Rx = R.template block<2, 2>(1, 1);
+    return SO2<Scalar>(makeRotationMatrix(Rx)).log();
+  }
+
+  // Extract rotation angle about canonical Y-axis
+  //
+  Scalar angleY() {
+    Sophus::Matrix3<Scalar> R = matrix();
+    Sophus::Matrix2<Scalar> Ry;
+    // clang-format off
+    Ry <<
+      R(0, 0), R(2, 0),
+      R(0, 2), R(2, 2);
+    // clang-format on
+    return SO2<Scalar>(makeRotationMatrix(Ry)).log();
+  }
+
+  // Extract rotation angle about canonical Z-axis
+  //
+  Scalar angleZ() {
+    Sophus::Matrix3<Scalar> R = matrix();
+    Sophus::Matrix2<Scalar> Rz = R.template block<2, 2>(0, 0);
+    return SO2<Scalar>(makeRotationMatrix(Rz)).log();
+  }
+
 
   // Returns copy of instance casted to NewScalarType.
   //
@@ -207,6 +240,17 @@ class SO3Base {
     return unit_quaternion()._transformVector(p);
   }
 
+  // Group action on lines.
+  //
+  // This function rotates a parametrized line ``l(t) = o + t * d`` by the SO3
+  // element:
+  //
+  // Both direction ``d`` and origin ``o`` are rotated as a 3 dimensional point
+  //
+  SOPHUS_FUNC Line operator*(Line const& l) const {
+    return Line((*this) * l.origin(), (*this) * l.direction());
+  }
+
   // In-place group multiplication.
   //
   SOPHUS_FUNC SO3Base<Derived>& operator*=(SO3<Scalar> const& other) {
@@ -300,10 +344,10 @@ class SO3Base {
       real_factor = cos(half_theta);
     }
 
-    SO3<Scalar> q;
-    q.unit_quaternion_nonconst() = Eigen::Quaternion<Scalar>(
-        real_factor, imag_factor * omega.x(), imag_factor * omega.y(),
-        imag_factor * omega.z());
+    Derived q;
+    q.unit_quaternion_nonconst() =
+        QuaternionType(real_factor, imag_factor * omega.x(),
+                       imag_factor * omega.y(), imag_factor * omega.z());
     SOPHUS_ENSURE(abs(q.unit_quaternion().squaredNorm() - Scalar(1)) <
                       Sophus::Constants<Scalar>::epsilon(),
                   "SO3::exp failed! omega: %, real: %, img: %",
@@ -347,6 +391,7 @@ class SO3Base {
     SOPHUS_ENSURE(internal_gen_q != NULL,
                   "internal_gen_q must not be the null pointer");
     // Factor of 0.5 since SU(2) is a double cover of SO(3).
+    internal_gen_q->coeffs().setZero();
     internal_gen_q->coeffs()[i] = Scalar(0.5);
   }
 
@@ -469,15 +514,6 @@ class SO3Base {
   //
   SOPHUS_FUNC static Tangent vee(Transformation const& Omega) {
     using std::abs;
-    SOPHUS_ENSURE(
-        Omega.diagonal().template lpNorm<1>() < Constants<Scalar>::epsilon(),
-        "Omega: \n%", Omega);
-    SOPHUS_ENSURE(abs(Omega(2, 1) + Omega(1, 2)) < Constants<Scalar>::epsilon(),
-                  "Omega: %s", Omega);
-    SOPHUS_ENSURE(abs(Omega(0, 2) + Omega(2, 0)) < Constants<Scalar>::epsilon(),
-                  "Omega: %s", Omega);
-    SOPHUS_ENSURE(abs(Omega(1, 0) + Omega(0, 1)) < Constants<Scalar>::epsilon(),
-                  "Omega: %s", Omega);
     return Tangent(Omega(2, 1), Omega(0, 2), Omega(1, 0));
   }
 
@@ -501,6 +537,7 @@ class SO3 : public SO3Base<SO3<Scalar_, Options>> {
   using Point = typename Base::Point;
   using Tangent = typename Base::Tangent;
   using Adjoint = typename Base::Adjoint;
+  using QuaternionMember = Eigen::Quaternion<Scalar, Options>;
 
   // ``Base`` is friend so unit_quaternion_nonconst can be accessed from
   // ``Base``.
@@ -523,31 +560,62 @@ class SO3 : public SO3Base<SO3<Scalar_, Options>> {
   //
   // Precondition: rotation matrix needs to be orthogonal with determinant of 1.
   //
-  SOPHUS_FUNC SO3(Transformation const& R) : unit_quaternion_(R) {}
+  SOPHUS_FUNC SO3(Transformation const& R) : unit_quaternion_(R) {
+    SOPHUS_ENSURE(isOrthogonal(R), "R is not orthogonal:\n %", R);
+    SOPHUS_ENSURE(R.determinant() > 0, "det(R) is not positive: %",
+                  R.determinant());
+  }
+
+  // Returns closed SO3 given arbirary 3x3 matrix.
+  static SOPHUS_FUNC SO3 fromNonOrthogonal(Transformation const& R) {
+    return SO3(::Sophus::makeRotationMatrix(R));
+  }
 
   // Constructor from quaternion
   //
   // Precondition: quaternion must not be close to zero.
   //
-  SOPHUS_FUNC explicit SO3(Eigen::Quaternion<Scalar> const& quat)
+  template <class D>
+  SOPHUS_FUNC explicit SO3(Eigen::QuaternionBase<D> const& quat)
       : unit_quaternion_(quat) {
+    static_assert(
+        std::is_same<typename Eigen::QuaternionBase<D>::Scalar, Scalar>::value,
+        "Input must be of same scalar type");
     Base::normalize();
+  }
+
+  // Contruct x-axis rotation.
+  //
+  static SOPHUS_FUNC SO3 rotX(Scalar const& x) {
+    return SO3::exp(Sophus::Vector3<Scalar>(x, Scalar(0), Scalar(0)));
+  }
+
+  // Contruct y-axis rotation.
+  //
+  static SOPHUS_FUNC SO3 rotY(Scalar const& y) {
+    return SO3::exp(Sophus::Vector3<Scalar>(Scalar(0), y, Scalar(0)));
+  }
+
+  // Contruct z-axis rotation.
+  //
+  static SOPHUS_FUNC SO3 rotZ(Scalar const& z) {
+    return SO3::exp(Sophus::Vector3<Scalar>(Scalar(0), Scalar(0), z));
   }
 
   // Accessor of unit quaternion.
   //
-  SOPHUS_FUNC Eigen::Quaternion<Scalar> const& unit_quaternion() const {
+  SOPHUS_FUNC QuaternionMember const& unit_quaternion() const {
     return unit_quaternion_;
   }
 
  protected:
   // Mutator of unit_quaternion is protected to ensure class invariant.
   //
-  SOPHUS_FUNC Eigen::Quaternion<Scalar>& unit_quaternion_nonconst() {
+  SOPHUS_FUNC QuaternionMember& unit_quaternion_nonconst() {
     return unit_quaternion_;
   }
 
-  Eigen::Quaternion<Scalar> unit_quaternion_;
+  QuaternionMember unit_quaternion_;
 };
 
 }  // namespace Sophus

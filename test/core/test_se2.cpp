@@ -13,7 +13,8 @@ template class Map<Sophus::SE2<double> const>;
 
 namespace Sophus {
 
-template class SE2<double>;
+template class SE2<double, Eigen::AutoAlign>;
+template class SE2<double, Eigen::DontAlign>;
 
 template <class Scalar>
 class Tests {
@@ -53,6 +54,7 @@ class Tests {
     tangent_vec_.push_back(tmp);
 
     point_vec_.push_back(Point(1, 2));
+    point_vec_.push_back(Point(1, -3));
   }
 
   void runAll() {

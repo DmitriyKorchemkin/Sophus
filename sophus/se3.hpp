@@ -16,8 +16,8 @@ namespace internal {
 template <class Scalar_, int Options>
 struct traits<Sophus::SE3<Scalar_, Options>> {
   using Scalar = Scalar_;
-  using TranslationType = Sophus::Vector3<Scalar>;
-  using SO3Type = Sophus::SO3<Scalar>;
+  using TranslationType = Sophus::Vector3<Scalar, Options>;
+  using SO3Type = Sophus::SO3<Scalar, Options>;
 };
 
 template <class Scalar_, int Options>
@@ -60,7 +60,7 @@ class SE3Base {
   using SO3Type = typename Eigen::internal::traits<Derived>::SO3Type;
   using QuaternionType = typename SO3Type::QuaternionType;
   // Degrees of freedom of manifold, number of dimensions in tangent space
-  // (two for translation, two for rotation).
+  // (three for translation, three for rotation).
   static int constexpr DoF = 6;
   // Number of internal parameters used (4-tuple for quaternion, three for
   // translation).
@@ -69,6 +69,7 @@ class SE3Base {
   static int constexpr N = 4;
   using Transformation = Matrix<Scalar, N, N>;
   using Point = Vector3<Scalar>;
+  using Line = ParametrizedLine3<Scalar>;
   using Tangent = Vector<Scalar, DoF>;
   using Adjoint = Matrix<Scalar, DoF, DoF>;
   // Adjoint transformation
@@ -86,6 +87,18 @@ class SE3Base {
     res.block(3, 0, 3, 3) = Matrix3<Scalar>::Zero(3, 3);
     return res;
   }
+
+  // Extract rotation angle about canonical X-axis
+  //
+  Scalar angleX() { return so3().angleX(); }
+
+  // Extract rotation angle about canonical Y-axis
+  //
+  Scalar angleY() { return so3().angleY(); }
+
+  // Extract rotation angle about canonical Z-axis
+  //
+  Scalar angleZ() { return so3().angleZ(); }
 
   // Returns copy of instance casted to NewScalarType.
   //
@@ -198,7 +211,15 @@ class SE3Base {
     return so3() * p + translation();
   }
 
-  SOPHUS_FUNC Line operator*(const Line& l) const {
+  // Group action on lines.
+  //
+  // This function rotates and translates a parametrized line
+  // ``l(t) = o + t * d`` by the SE(3) element:
+  //
+  // Origin is transformed using SE(3) action
+  // Direction is transformed using rotation part
+  //
+  SOPHUS_FUNC Line operator*(Line const& l) const {
     return Line((*this) * l.origin(), so3() * l.direction());
   }
 
@@ -236,8 +257,11 @@ class SE3Base {
   //
   // Precondition: ``R`` must be orthogonal and ``det(R)=1``.
   //
-  SOPHUS_FUNC void setRotationMatrix(Matrix3<Scalar> const& rotation_matrix) {
-    so3().setQuaternion(Eigen::Quaternion<Scalar>(rotation_matrix));
+  SOPHUS_FUNC void setRotationMatrix(Matrix3<Scalar> const& R) {
+    SOPHUS_ENSURE(isOrthogonal(R), "R is not orthogonal:\n %", R);
+    SOPHUS_ENSURE(R.determinant() > 0, "det(R) is not positive: %",
+                  R.determinant());
+    so3().setQuaternion(Eigen::Quaternion<Scalar>(R));
   }
 
   // Mutator of translation vector.
@@ -443,25 +467,28 @@ class SE3Base {
     // https://pdfs.semanticscholar.org/cfe3/e4b39de63c8cabd89bf3feff7f5449fc981d.pdf
     // (Sec. 6., pp. 8)
     using std::abs;
+    using std::cos;
+    using std::sin;
     Tangent upsilon_omega;
     Scalar theta;
     upsilon_omega.template tail<3>() =
         SO3<Scalar>::logAndTheta(se3.so3(), &theta);
+    Matrix3<Scalar> const Omega =
+        SO3<Scalar>::hat(upsilon_omega.template tail<3>());
 
     if (abs(theta) < Constants<Scalar>::epsilon()) {
-      Matrix3<Scalar> const Omega =
-          SO3<Scalar>::hat(upsilon_omega.template tail<3>());
       Matrix3<Scalar> const V_inv = Matrix3<Scalar>::Identity() -
                                     Scalar(0.5) * Omega +
                                     Scalar(1. / 12.) * (Omega * Omega);
 
       upsilon_omega.template head<3>() = V_inv * se3.translation();
     } else {
-      Matrix3<Scalar> const Omega =
-          SO3<Scalar>::hat(upsilon_omega.template tail<3>());
+      Scalar const half_theta = Scalar(0.5) * theta;
+
       Matrix3<Scalar> const V_inv =
           (Matrix3<Scalar>::Identity() - Scalar(0.5) * Omega +
-           (Scalar(1) - theta / (Scalar(2) * tan(theta / Scalar(2)))) /
+           (Scalar(1) -
+            theta * cos(half_theta) / (Scalar(2) * sin(half_theta))) /
                (theta * theta) * (Omega * Omega));
       upsilon_omega.template head<3>() = V_inv * se3.translation();
     }
@@ -483,9 +510,6 @@ class SE3Base {
   //                |  0  0  0  0 | .
   //
   SOPHUS_FUNC static Tangent vee(Transformation const& Omega) {
-    SOPHUS_ENSURE(
-        Omega.row(3).template lpNorm<1>() < Constants<Scalar>::epsilon(),
-        "Omega: \n%", Omega);
     Tangent upsilon_omega;
     upsilon_omega.template head<3>() = Omega.col(3).template head<3>();
     upsilon_omega.template tail<3>() =
@@ -505,6 +529,8 @@ class SE3 : public SE3Base<SE3<Scalar_, Options>> {
   using Point = typename Base::Point;
   using Tangent = typename Base::Tangent;
   using Adjoint = typename Base::Adjoint;
+  using SO3Member = SO3<Scalar, Options>;
+  using TranslationMember = Vector3<Scalar, Options>;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
@@ -516,13 +542,22 @@ class SE3 : public SE3Base<SE3<Scalar_, Options>> {
   //
   template <class OtherDerived>
   SOPHUS_FUNC SE3(SE3Base<OtherDerived> const& other)
-      : so3_(other.so3()), translation_(other.translation()) {}
+      : so3_(other.so3()), translation_(other.translation()) {
+    static_assert(std::is_same<typename OtherDerived::Scalar, Scalar>::value,
+                  "must be same Scalar type");
+  }
 
   // Constructor from SO3 and translation vector
   //
-  template <class OtherDerived>
-  SOPHUS_FUNC SE3(SO3Base<OtherDerived> const& so3, Point const& translation)
-      : so3_(so3), translation_(translation) {}
+  template <class OtherDerived, class D>
+  SOPHUS_FUNC SE3(SO3Base<OtherDerived> const& so3,
+                  Eigen::MatrixBase<D> const& translation)
+      : so3_(so3), translation_(translation) {
+    static_assert(std::is_same<typename OtherDerived::Scalar, Scalar>::value,
+                  "must be same Scalar type");
+    static_assert(std::is_same<typename D::Scalar, Scalar>::value,
+                  "must be same Scalar type");
+  }
 
   // Constructor from rotation matrix and translation vector
   //
@@ -553,6 +588,49 @@ class SE3 : public SE3Base<SE3<Scalar_, Options>> {
                   "Last row is not (0,0,0,1), but (%).", T.row(3));
   }
 
+  // Construct a translation only SE3 instance.
+  //
+  template <class T0, class T1, class T2>
+  static SOPHUS_FUNC SE3 trans(T0 const& x, T1 const& y, T2 const& z) {
+    return SE3(SO3<Scalar>(), Vector3<Scalar>(x, y, z));
+  }
+
+  // Contruct x-axis translation.
+  //
+  static SOPHUS_FUNC SE3 transX(Scalar const& x) {
+    return SE3::trans(x, Scalar(0), Scalar(0));
+  }
+
+  // Contruct y-axis translation.
+  //
+  static SOPHUS_FUNC SE3 transY(Scalar const& y) {
+    return SE3::trans(Scalar(0), y, Scalar(0));
+  }
+
+  // Contruct z-axis translation.
+  //
+  static SOPHUS_FUNC SE3 transZ(Scalar const& z) {
+    return SE3::trans(Scalar(0), Scalar(0), z);
+  }
+
+  // Contruct x-axis rotation.
+  //
+  static SOPHUS_FUNC SE3 rotX(Scalar const& x) {
+    return SE3(SO3<Scalar>::rotX(x), Sophus::Vector3<Scalar>::Zero());
+  }
+
+  // Contruct y-axis rotation.
+  //
+  static SOPHUS_FUNC SE3 rotY(Scalar const& y) {
+    return SE3(SO3<Scalar>::rotY(y), Sophus::Vector3<Scalar>::Zero());
+  }
+
+  // Contruct z-axis rotation.
+  //
+  static SOPHUS_FUNC SE3 rotZ(Scalar const& z) {
+    return SE3(SO3<Scalar>::rotZ(z), Sophus::Vector3<Scalar>::Zero());
+  }
+
   // This provides unsafe read/write access to internal data. SO(3) is
   // represented by an Eigen::Quaternion (four parameters). When using direct
   // write access, the user needs to take care of that the quaternion stays
@@ -572,25 +650,25 @@ class SE3 : public SE3Base<SE3<Scalar_, Options>> {
 
   // Accessor of SO3
   //
-  SOPHUS_FUNC SO3<Scalar>& so3() { return so3_; }
+  SOPHUS_FUNC SO3Member& so3() { return so3_; }
 
   // Mutator of SO3
   //
-  SOPHUS_FUNC SO3<Scalar> const& so3() const { return so3_; }
+  SOPHUS_FUNC SO3Member const& so3() const { return so3_; }
 
   // Mutator of translation vector
   //
-  SOPHUS_FUNC Vector3<Scalar>& translation() { return translation_; }
+  SOPHUS_FUNC TranslationMember& translation() { return translation_; }
 
   // Accessor of translation vector
   //
-  SOPHUS_FUNC Vector3<Scalar> const& translation() const {
+  SOPHUS_FUNC TranslationMember const& translation() const {
     return translation_;
   }
 
  protected:
-  Sophus::SO3<Scalar> so3_;
-  Vector<Scalar, 3> translation_;
+  SO3Member so3_;
+  TranslationMember translation_;
 };
 
 }  // namespace Sophus

@@ -19,6 +19,7 @@ class LieGroupTests {
   using Transformation = typename LieGroup::Transformation;
   using Tangent = typename LieGroup::Tangent;
   using Point = typename LieGroup::Point;
+  using Line = typename LieGroup::Line;
   using Adjoint = typename LieGroup::Adjoint;
   static int constexpr N = LieGroup::N;
   static int constexpr DoF = LieGroup::DoF;
@@ -88,6 +89,32 @@ class LieGroupTests {
         Point point2 = map(T, p);
         SOPHUS_TEST_APPROX(passed, point1, point2, kSmallEps,
                            "Transform point case: %", i);
+      }
+    }
+    return passed;
+  }
+
+  bool lineActionTest() {
+    bool passed = point_vec_.size() > 1;
+
+    for (size_t i = 0; i < group_vec_.size(); ++i) {
+      for (size_t j = 0; j + 1 < point_vec_.size(); ++j) {
+        Point const& p1 = point_vec_[j];
+        Point const& p2 = point_vec_[j + 1];
+        Line l = Line::Through(p1, p2);
+        Point p1_t = group_vec_[i] * p1;
+        Point p2_t = group_vec_[i] * p2;
+        Line l_t = group_vec_[i] * l;
+
+        SOPHUS_TEST_APPROX(passed, l_t.squaredDistance(p1_t),
+                           static_cast<Scalar>(0), kSmallEps,
+                           "Transform line case (1st point) : %", i);
+        SOPHUS_TEST_APPROX(passed, l_t.squaredDistance(p2_t),
+                           static_cast<Scalar>(0), kSmallEps,
+                           "Transform line case (2nd point) : %", i);
+        SOPHUS_TEST_APPROX(passed, l_t.direction().squaredNorm(),
+                           l.direction().squaredNorm(), kSmallEps,
+                           "Transform line case (direction) : %", i);
       }
     }
     return passed;
@@ -246,10 +273,12 @@ class LieGroupTests {
   }
 
   bool doAllTestsPass() {
-    bool passed = adjointTest();
+    bool passed = true;
+    passed &= adjointTest();
     passed &= expLogTest();
     passed &= expMapTest();
     passed &= groupActionTest();
+    passed &= lineActionTest();
     passed &= lieBracketTest();
     passed &= veeHatTest();
     passed &= newDeleteSmokeTest();
@@ -276,5 +305,45 @@ class LieGroupTests {
   std::vector<Tangent, Eigen::aligned_allocator<Tangent>> tangent_vec_;
   std::vector<Point, Eigen::aligned_allocator<Point>> point_vec_;
 };
+
+template <class T>
+std::vector<SE3<T>, Eigen::aligned_allocator<SE3<T>>> getTestSE3s() {
+  T const kPi = Constants<T>::pi();
+  std::vector<SE3<T>, Eigen::aligned_allocator<SE3<T>>> se3_vec;
+  se3_vec.push_back(
+      SE3<T>(SO3<T>::exp(Vector3<T>(0.2, 0.5, 0.0)), Vector3<T>(0, 0, 0)));
+  se3_vec.push_back(
+      SE3<T>(SO3<T>::exp(Vector3<T>(0.2, 0.5, -1.0)), Vector3<T>(10, 0, 0)));
+  se3_vec.push_back(SE3<T>::trans(0, 100, 5));
+  se3_vec.push_back(SE3<T>::rotZ(0.00001));
+  se3_vec.push_back(SE3<T>::trans(0, -0.00000001, 0.0000000001) *
+                    SE3<T>::rotZ(0.00001));
+  se3_vec.push_back(SE3<T>::transX(0.01) * SE3<T>::rotZ(0.00001));
+  se3_vec.push_back(SE3<T>::trans(4, -5, 0) * SE3<T>::rotX(kPi));
+  se3_vec.push_back(
+      SE3<T>(SO3<T>::exp(Vector3<T>(0.2, 0.5, 0.0)), Vector3<T>(0, 0, 0)) *
+      SE3<T>::rotX(kPi) *
+      SE3<T>(SO3<T>::exp(Vector3<T>(-0.2, -0.5, -0.0)), Vector3<T>(0, 0, 0)));
+  se3_vec.push_back(
+      SE3<T>(SO3<T>::exp(Vector3<T>(0.3, 0.5, 0.1)), Vector3<T>(2, 0, -7)) *
+      SE3<T>::rotX(kPi) *
+      SE3<T>(SO3<T>::exp(Vector3<T>(-0.3, -0.5, -0.1)), Vector3<T>(0, 6, 0)));
+  return se3_vec;
+}
+
+template <class T>
+std::vector<SE2<T>, Eigen::aligned_allocator<SE2<T>>> getTestSE2s() {
+  T const kPi = Constants<T>::pi();
+  std::vector<SE2<T>, Eigen::aligned_allocator<SE2<T>>> se2_vec;
+  se2_vec.push_back(SE2<T>());
+  se2_vec.push_back(SE2<T>(SO2<T>(0.2), Vector2<T>(10, 0)));
+  se2_vec.push_back(SE2<T>::transY(100));
+  se2_vec.push_back(SE2<T>(SO2<T>(-1.), Vector2<T>(20, -1)));
+  se2_vec.push_back(
+      SE2<T>(SO2<T>(0.00001), Vector2<T>(-0.00000001, 0.0000000001)));
+  se2_vec.push_back(SE2<T>(SO2<T>(0.3), Vector2<T>(2, 0)) * SE2<T>::rot(kPi) *
+                    SE2<T>(SO2<T>(-0.3), Vector2<T>(0, 6)));
+  return se2_vec;
+}
 }
 #endif  // TESTS_HPP

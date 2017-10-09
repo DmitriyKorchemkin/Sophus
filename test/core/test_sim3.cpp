@@ -14,7 +14,8 @@ template class Map<Sophus::Sim3<double> const>;
 
 namespace Sophus {
 
-template class Sim3<double>;
+template class Sim3<double, Eigen::AutoAlign>;
+template class Sim3<float, Eigen::DontAlign>;
 
 template <class Scalar>
 class Tests {
@@ -73,6 +74,7 @@ class Tests {
     tangent_vec_.push_back(tmp);
 
     point_vec_.push_back(Point(1, 2, 4));
+    point_vec_.push_back(Point(1, -3, 0.5));
   }
 
   void runAll() {
