@@ -326,7 +326,7 @@ class Sim2Base {
   //
   // The infinitesimal generators of Sim(2) are:
   //
-  //         |  0  0  1 |1111111
+  //         |  0  0  1 |
   //   G_0 = |  0  0  0 |
   //         |  0  0  0 |
   //
@@ -530,6 +530,19 @@ class Sim2 : public Sim2Base<Sim2<Scalar_, Options>> {
   SOPHUS_FUNC Scalar const* data() const {
     // rxso2_ and translation_ are laid out sequentially with no padding
     return rxso2_.data();
+  }
+
+  // Draw uniform sample from Sim(2) manifold.
+  //
+  // Translations are drawn component-wise from the range [-1, 1].
+  // The scale factor is drawn uniformly in log2-space from [-1, 1],
+  // hence the scale is in [0.5, 2].
+  //
+  template <class UniformRandomBitGenerator>
+  static Sim2 sampleUniform(UniformRandomBitGenerator& generator) {
+    std::uniform_real_distribution<Scalar> uniform(Scalar(-1), Scalar(1));
+    return Sim2(RxSO2<Scalar>::sampleUniform(generator),
+                Vector2<Scalar>(uniform(generator), uniform(generator)));
   }
 
   // Accessor of RxSO2

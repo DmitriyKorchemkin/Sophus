@@ -53,7 +53,7 @@ namespace Sophus {
 // determinant is 1. Internally, the group is represented as a unit quaternion.
 // Unit quaternion can be seen as members of the special unitary group SU(2).
 // SU(2) is a double cover of SO(3). Hence, for every rotation matrix ``R``,
-// there exists two unit quaternion: ``(r, v)`` and ``(r, -v)``, with ``r`` the
+// there exist two unit quaternions: ``(r, v)`` and ``(-r, -v)``, with ``r`` the
 // real part and ``v`` being the imaginary 3-vector part of the quaternion.
 //
 // SO(3) is a compact, but non-commutative group. First it is compact since the
@@ -63,7 +63,7 @@ namespace Sophus {
 // and then by some degrees about its y axis, does not lead to the same
 // orienation when rotation first about ``y`` and then about ``x``.
 //
-// Class invairant: The 2-norm of ``unit_quaternion`` must be close to 1.
+// Class invariant: The 2-norm of ``unit_quaternion`` must be close to 1.
 // Technically speaking, it must hold that:
 //
 //   ``|unit_quaternion().squaredNorm() - 1| <= Constants<Scalar>::epsilon()``.
@@ -98,7 +98,7 @@ class SO3Base {
 
   // Extract rotation angle about canonical X-axis
   //
-  Scalar angleX() {
+  Scalar angleX() const {
     Sophus::Matrix3<Scalar> R = matrix();
     Sophus::Matrix2<Scalar> Rx = R.template block<2, 2>(1, 1);
     return SO2<Scalar>(makeRotationMatrix(Rx)).log();
@@ -106,7 +106,7 @@ class SO3Base {
 
   // Extract rotation angle about canonical Y-axis
   //
-  Scalar angleY() {
+  Scalar angleY() const {
     Sophus::Matrix3<Scalar> R = matrix();
     Sophus::Matrix2<Scalar> Ry;
     // clang-format off
@@ -119,12 +119,11 @@ class SO3Base {
 
   // Extract rotation angle about canonical Z-axis
   //
-  Scalar angleZ() {
+  Scalar angleZ() const {
     Sophus::Matrix3<Scalar> R = matrix();
     Sophus::Matrix2<Scalar> Rz = R.template block<2, 2>(0, 0);
     return SO2<Scalar>(makeRotationMatrix(Rz)).log();
   }
-
 
   // Returns copy of instance casted to NewScalarType.
   //
@@ -337,7 +336,7 @@ class SO3Base {
       imag_factor = Scalar(0.5) - Scalar(1.0 / 48.0) * theta_sq +
                     Scalar(1.0 / 3840.0) * theta_po4;
       real_factor =
-          Scalar(1) - Scalar(0.5) * theta_sq + Scalar(1.0 / 384.0) * theta_po4;
+          Scalar(1) - Scalar(1.0 / 8.0) * theta_sq + Scalar(1.0 / 384.0) * theta_po4;
     } else {
       Scalar sin_half_theta = sin(half_theta);
       imag_factor = sin_half_theta / (*theta);
@@ -513,7 +512,6 @@ class SO3Base {
   //                | -b  a  0 | .
   //
   SOPHUS_FUNC static Tangent vee(Transformation const& Omega) {
-    using std::abs;
     return Tangent(Omega(2, 1), Omega(0, 2), Omega(1, 0));
   }
 
@@ -561,13 +559,15 @@ class SO3 : public SO3Base<SO3<Scalar_, Options>> {
   // Precondition: rotation matrix needs to be orthogonal with determinant of 1.
   //
   SOPHUS_FUNC SO3(Transformation const& R) : unit_quaternion_(R) {
-    SOPHUS_ENSURE(isOrthogonal(R), "R is not orthogonal:\n %", R);
-    SOPHUS_ENSURE(R.determinant() > 0, "det(R) is not positive: %",
+    SOPHUS_ENSURE(isOrthogonal(R), "R is not orthogonal:\n %",
+                  R * R.transpose());
+    SOPHUS_ENSURE(R.determinant() > Scalar(0), "det(R) is not positive: %",
                   R.determinant());
   }
 
-  // Returns closed SO3 given arbirary 3x3 matrix.
-  static SOPHUS_FUNC SO3 fromNonOrthogonal(Transformation const& R) {
+  // Returns closest SO3 given arbirary 3x3 matrix.
+  //
+  static SOPHUS_FUNC SO3 fitToSO3(Transformation const& R) {
     return SO3(::Sophus::makeRotationMatrix(R));
   }
 
@@ -600,6 +600,27 @@ class SO3 : public SO3Base<SO3<Scalar_, Options>> {
   //
   static SOPHUS_FUNC SO3 rotZ(Scalar const& z) {
     return SO3::exp(Sophus::Vector3<Scalar>(Scalar(0), Scalar(0), z));
+  }
+
+  // Draw uniform sample from SO(3) manifold.
+  //
+  template <class UniformRandomBitGenerator>
+  static SO3 sampleUniform(UniformRandomBitGenerator& generator) {
+    static_assert(IsUniformRandomBitGenerator<UniformRandomBitGenerator>::value,
+                  "generator must meet the UniformRandomBitGenerator concept");
+    std::uniform_real_distribution<Scalar> uniform(-Constants<Scalar>::pi(),
+                                                   Constants<Scalar>::pi());
+    std::normal_distribution<Scalar> normal(0, 1);
+    Sophus::Vector3<Scalar> axis;
+    Scalar nrm;
+    do {
+      axis.x() = normal(generator);
+      axis.y() = normal(generator);
+      axis.z() = normal(generator);
+      nrm = axis.norm();
+    } while (nrm < Constants<Scalar>::epsilon());
+    axis /= nrm;
+    return SO3::exp(uniform(generator) * axis);
   }
 
   // Accessor of unit quaternion.

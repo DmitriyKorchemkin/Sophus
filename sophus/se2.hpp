@@ -498,6 +498,13 @@ class SE2 : public SE2Base<SE2<Scalar_, Options>> {
       : so2_(T.template topLeftCorner<2, 2>().eval()),
         translation_(T.template block<2, 1>(0, 2)) {}
 
+  // Returns closest SE3 given arbirary 4x4 matrix.
+  //
+  SOPHUS_FUNC static SE2 fitToSE2(Matrix3<Scalar> const& T) {
+    return SE2(SO2<Scalar>::fitToSO2(T.template block<2, 2>(0, 0)),
+               T.template block<2, 1>(0, 2));
+  }
+
   // Construct a translation only SE3 instance.
   //
   template <class T0, class T1>
@@ -538,6 +545,17 @@ class SE2 : public SE2Base<SE2<Scalar_, Options>> {
   SOPHUS_FUNC Scalar const* data() const {
     // so2_ and translation_ are layed out sequentially with no padding
     return so2_.data();
+  }
+
+  // Draw uniform sample from SE(3) manifold.
+  //
+  // Translations are drawn component-wise from the range [-1, 1].
+  //
+  template <class UniformRandomBitGenerator>
+  static SE2 sampleUniform(UniformRandomBitGenerator& generator) {
+    std::uniform_real_distribution<Scalar> uniform(Scalar(-1), Scalar(1));
+    return SE2(SO2<Scalar>::sampleUniform(generator),
+               Vector2<Scalar>(uniform(generator), uniform(generator)));
   }
 
   // Accessor of SO3

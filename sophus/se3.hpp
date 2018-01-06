@@ -90,15 +90,15 @@ class SE3Base {
 
   // Extract rotation angle about canonical X-axis
   //
-  Scalar angleX() { return so3().angleX(); }
+  Scalar angleX() const { return so3().angleX(); }
 
   // Extract rotation angle about canonical Y-axis
   //
-  Scalar angleY() { return so3().angleY(); }
+  Scalar angleY() const { return so3().angleY(); }
 
   // Extract rotation angle about canonical Z-axis
   //
-  Scalar angleZ() { return so3().angleZ(); }
+  Scalar angleZ() const { return so3().angleZ(); }
 
   // Returns copy of instance casted to NewScalarType.
   //
@@ -583,9 +583,17 @@ class SE3 : public SE3Base<SE3<Scalar_, Options>> {
   SOPHUS_FUNC explicit SE3(Matrix4<Scalar> const& T)
       : so3_(T.template topLeftCorner<3, 3>()),
         translation_(T.template block<3, 1>(0, 3)) {
-    SOPHUS_ENSURE((T.row(3) - Matrix<Scalar, 1, 4>(0, 0, 0, 1)).squaredNorm() <
-                      Constants<Scalar>::epsilon(),
+    SOPHUS_ENSURE((T.row(3) - Matrix<Scalar, 1, 4>(Scalar(0), Scalar(0),
+                                                   Scalar(0), Scalar(1)))
+                          .squaredNorm() < Constants<Scalar>::epsilon(),
                   "Last row is not (0,0,0,1), but (%).", T.row(3));
+  }
+
+  // Returns closest SE3 given arbirary 4x4 matrix.
+  //
+  SOPHUS_FUNC static SE3 fitToSE3(Matrix4<Scalar> const& T) {
+    return SE3(SO3<Scalar>::fitToSO3(T.template block<3, 3>(0, 0)),
+               T.template block<3, 1>(0, 3));
   }
 
   // Construct a translation only SE3 instance.
@@ -646,6 +654,18 @@ class SE3 : public SE3Base<SE3<Scalar_, Options>> {
   SOPHUS_FUNC Scalar const* data() const {
     // so3_ and translation_ are laid out sequentially with no padding
     return so3_.data();
+  }
+
+  // Draw uniform sample from SE(3) manifold.
+  //
+  // Translations are drawn component-wise from the range [-1, 1].
+  //
+  template <class UniformRandomBitGenerator>
+  static SE3 sampleUniform(UniformRandomBitGenerator& generator) {
+    std::uniform_real_distribution<Scalar> uniform(Scalar(-1), Scalar(1));
+    return SE3(SO3<Scalar>::sampleUniform(generator),
+               Vector3<Scalar>(uniform(generator), uniform(generator),
+                               uniform(generator)));
   }
 
   // Accessor of SO3

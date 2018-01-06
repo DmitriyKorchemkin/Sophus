@@ -569,6 +569,19 @@ class RxSO3 : public RxSO3Base<RxSO3<Scalar_, Options>> {
                   "Scale factor must be greater-equal epsilon.");
   }
 
+  // Draw uniform sample from RxSO(3) manifold.
+  //
+  // The scale factor is drawn uniformly in log2-space from [-1, 1],
+  // hence the scale is in [0.5, 2].
+  //
+  template <class UniformRandomBitGenerator>
+  static RxSO3 sampleUniform(UniformRandomBitGenerator& generator) {
+    std::uniform_real_distribution<Scalar> uniform(Scalar(-1), Scalar(1));
+    using std::exp2;
+    return RxSO3(exp2(uniform(generator)),
+                 SO3<Scalar>::sampleUniform(generator));
+  }
+
   // Accessor of quaternion.
   //
   SOPHUS_FUNC QuaternionMember const& quaternion() const { return quaternion_; }

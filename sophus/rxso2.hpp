@@ -502,6 +502,19 @@ class RxSO2 : public RxSO2Base<RxSO2<Scalar_, Options>> {
   SOPHUS_FUNC explicit RxSO2(Scalar const& real, Scalar const& imag)
       : RxSO2(Vector2<Scalar>(real, imag)) {}
 
+  // Draw uniform sample from RxSO(2) manifold.
+  //
+  // The scale factor is drawn uniformly in log2-space from [-1, 1],
+  // hence the scale is in [0.5, 2)].
+  //
+  template <class UniformRandomBitGenerator>
+  static RxSO2 sampleUniform(UniformRandomBitGenerator& generator) {
+    std::uniform_real_distribution<Scalar> uniform(Scalar(-1), Scalar(1));
+    using std::exp2;
+    return RxSO2(exp2(uniform(generator)),
+                 SO2<Scalar>::sampleUniform(generator));
+  }
+
   // Accessor of complex.
   //
   SOPHUS_FUNC ComplexMember const& complex() const { return complex_; }
