@@ -86,6 +86,13 @@ class SO3Base {
   using Tangent = Vector<Scalar, DoF>;
   using Adjoint = Matrix<Scalar, DoF, DoF>;
 
+  struct TangentAndTheta {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+    Tangent tangent;
+    Scalar theta;
+  };
+
   // Adjoint transformation
   //
   // This function return the adjoint transformation ``Ad`` of the group
@@ -98,7 +105,8 @@ class SO3Base {
 
   // Extract rotation angle about canonical X-axis
   //
-  Scalar angleX() const {
+  template <class S = Scalar>
+  SOPHUS_FUNC enable_if_t<std::is_floating_point<S>::value, S> angleX() const {
     Sophus::Matrix3<Scalar> R = matrix();
     Sophus::Matrix2<Scalar> Rx = R.template block<2, 2>(1, 1);
     return SO2<Scalar>(makeRotationMatrix(Rx)).log();
@@ -106,7 +114,8 @@ class SO3Base {
 
   // Extract rotation angle about canonical Y-axis
   //
-  Scalar angleY() const {
+  template <class S = Scalar>
+  SOPHUS_FUNC enable_if_t<std::is_floating_point<S>::value, S> angleY() const {
     Sophus::Matrix3<Scalar> R = matrix();
     Sophus::Matrix2<Scalar> Ry;
     // clang-format off
@@ -119,7 +128,8 @@ class SO3Base {
 
   // Extract rotation angle about canonical Z-axis
   //
-  Scalar angleZ() const {
+  template <class S = Scalar>
+  SOPHUS_FUNC enable_if_t<std::is_floating_point<S>::value, S> angleZ() const {
     Sophus::Matrix3<Scalar> R = matrix();
     Sophus::Matrix2<Scalar> Rz = R.template block<2, 2>(0, 0);
     return SO2<Scalar>(makeRotationMatrix(Rz)).log();
@@ -150,25 +160,41 @@ class SO3Base {
     return unit_quaternion().coeffs().data();
   }
 
-  // Returns ``*this`` times the ith generator of internal SU(2) representation.
+  // Returns derivative of  this * SO3::exp(x)  wrt. x at x=0.
   //
-  SOPHUS_FUNC Vector<Scalar, num_parameters> internalMultiplyByGenerator(
-      int i) const {
-    Vector<Scalar, num_parameters> res;
-    Eigen::Quaternion<Scalar> internal_gen_q;
-    internalGenerator(i, &internal_gen_q);
-    res.template head<4>() = (unit_quaternion() * internal_gen_q).coeffs();
-    return res;
+  SOPHUS_FUNC Matrix<Scalar, DoF, num_parameters> Dx_this_mul_exp_x_at_0()
+      const {
+    Matrix<Scalar, DoF, num_parameters> J;
+    Eigen::Quaternion<Scalar> const q = unit_quaternion();
+    Scalar const c0 = Scalar(0.5) * q.w();
+    Scalar const c1 = Scalar(0.5) * q.z();
+    Scalar const c2 = Scalar(0.5) * q.y();
+    Scalar const c3 = -c2;
+    Scalar const c4 = Scalar(0.5) * q.x();
+    Scalar const c5 = -c4;
+    Scalar const c6 = -c1;
+    J(0, 0) = c0;
+    J(0, 1) = c1;
+    J(0, 2) = c3;
+    J(0, 3) = c5;
+    J(1, 0) = c6;
+    J(1, 1) = c0;
+    J(1, 2) = c4;
+    J(1, 3) = c3;
+    J(2, 0) = c2;
+    J(2, 1) = c5;
+    J(2, 2) = c0;
+    J(2, 3) = c6;
+    return J;
   }
 
-  // Returns Jacobian of generator of internal SU(2) representation.
+  // Returns internal parameters of SO(3).
   //
-  SOPHUS_FUNC Matrix<Scalar, num_parameters, DoF> internalJacobian() const {
-    Matrix<Scalar, num_parameters, DoF> J;
-    for (int i = 0; i < DoF; ++i) {
-      J.col(i) = internalMultiplyByGenerator(i);
-    }
-    return J;
+  // It returns (q.imag[0], q.imag[1], q.imag[2], q.real), with q being the unit
+  // quaternion.
+  //
+  SOPHUS_FUNC Sophus::Vector<Scalar, num_parameters> params() const {
+    return unit_quaternion().coeffs();
   }
 
   // Returns group inverse.
@@ -179,9 +205,62 @@ class SO3Base {
 
   // Logarithmic map
   //
-  // Returns tangent space representation (= rotation vector) of the instance.
+  // Computes the logarithm, the inverse of the group exponential which maps
+  // element of the group (rotation matrices) to elements of the tangent space
+  // (rotation-vector).
   //
-  SOPHUS_FUNC Tangent log() const { return SO3<Scalar>::log(*this); }
+  // To be specific, this function computes ``vee(logmat(.))`` with
+  // ``logmat(.)`` being the matrix logarithm and ``vee(.)`` the vee-operator
+  // of SO(3).
+  //
+  SOPHUS_FUNC Tangent log() const { return logAndTheta().tangent; }
+
+  // As above, but also returns ``theta = |omega|``.
+  //
+  SOPHUS_FUNC TangentAndTheta logAndTheta() const {
+    TangentAndTheta J;
+    using std::abs;
+    using std::atan;
+    using std::sqrt;
+    Scalar squared_n = unit_quaternion().vec().squaredNorm();
+    Scalar n = sqrt(squared_n);
+    Scalar w = unit_quaternion().w();
+
+    Scalar two_atan_nbyw_by_n;
+
+    // Atan-based log thanks to
+    //
+    // C. Hertzberg et al.:
+    // "Integrating Generic Sensor Fusion Algorithms with Sound State
+    // Representation through Encapsulation of Manifolds"
+    // Information Fusion, 2011
+
+    if (n < Constants<Scalar>::epsilon()) {
+      // If quaternion is normalized and n=0, then w should be 1;
+      // w=0 should never happen here!
+      SOPHUS_ENSURE(abs(w) >= Constants<Scalar>::epsilon(),
+                    "Quaternion (%) should be normalized!",
+                    unit_quaternion().coeffs().transpose());
+      Scalar squared_w = w * w;
+      two_atan_nbyw_by_n =
+          Scalar(2) / w - Scalar(2) * (squared_n) / (w * squared_w);
+    } else {
+      if (abs(w) < Constants<Scalar>::epsilon()) {
+        if (w > Scalar(0)) {
+          two_atan_nbyw_by_n = Constants<Scalar>::pi() / n;
+        } else {
+          two_atan_nbyw_by_n = -Constants<Scalar>::pi() / n;
+        }
+      } else {
+        two_atan_nbyw_by_n = Scalar(2) * atan(n / w) / n;
+      }
+    }
+
+    J.theta = two_atan_nbyw_by_n * n;
+
+    J.tangent = two_atan_nbyw_by_n * unit_quaternion().vec();
+    return J;
+  }
 
   // It re-normalizes ``unit_quaternion`` to unit length.
   //
@@ -207,6 +286,10 @@ class SO3Base {
 
   // Assignment operator.
   //
+  SOPHUS_FUNC SO3Base& operator=(SO3Base const& other) = default;
+
+  // Assignment-like operator from OtherDerived.
+  //
   template <class OtherDerived>
   SOPHUS_FUNC SO3Base<Derived>& operator=(SO3Base<OtherDerived> const& other) {
     unit_quaternion_nonconst() = other.unit_quaternion();
@@ -216,9 +299,9 @@ class SO3Base {
   // Group multiplication, which is rotation concatenation.
   //
   SOPHUS_FUNC SO3<Scalar> operator*(SO3<Scalar> const& other) const {
-    SO3<Scalar> result(*this);
-    result *= other;
-    return result;
+    SO3<Scalar> J(*this);
+    J *= other;
+    return J;
   }
 
   // Group action on 3-points.
@@ -286,19 +369,148 @@ class SO3Base {
     return static_cast<Derived const*>(this)->unit_quaternion();
   }
 
-  ////////////////////////////////////////////////////////////////////////////
-  // public static functions
-  ////////////////////////////////////////////////////////////////////////////
+ private:
+  // Mutator of unit_quaternion is private to ensure class invariant. That is
+  // the quaternion must stay close to unit length.
+  //
+  SOPHUS_FUNC QuaternionType& unit_quaternion_nonconst() {
+    return static_cast<Derived*>(this)->unit_quaternion_nonconst();
+  }
+};
 
-  // Derivative of Lie bracket with respect to first element.
+// SO3 default type - Constructors and default storage for SO3 Type.
+template <class Scalar_, int Options>
+class SO3 : public SO3Base<SO3<Scalar_, Options>> {
+  using Base = SO3Base<SO3<Scalar_, Options>>;
+
+ public:
+  static int constexpr DoF = Base::DoF;
+  static int constexpr num_parameters = Base::num_parameters;
+
+  using Scalar = Scalar_;
+  using Transformation = typename Base::Transformation;
+  using Point = typename Base::Point;
+  using Tangent = typename Base::Tangent;
+  using Adjoint = typename Base::Adjoint;
+  using QuaternionMember = Eigen::Quaternion<Scalar, Options>;
+
+  // ``Base`` is friend so unit_quaternion_nonconst can be accessed from
+  // ``Base``.
+  friend class SO3Base<SO3<Scalar, Options>>;
+
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+  // Default constructor initialize unit quaternion to identity rotation.
   //
-  // This function returns ``D_a [a, b]`` with ``D_a`` being the
-  // differential operator with respect to ``a``, ``[a, b]`` being the lie
-  // bracket of the Lie algebra so3.
-  // See ``lieBracket()`` below.
+  SOPHUS_FUNC SO3()
+      : unit_quaternion_(Scalar(1), Scalar(0), Scalar(0), Scalar(0)) {}
+
+  // Copy constructor
   //
-  SOPHUS_FUNC static Adjoint d_lieBracketab_by_d_a(Tangent const& b) {
-    return -hat(b);
+  SOPHUS_FUNC SO3(SO3 const& other) = default;
+
+  // Copy-like constructor from OtherDerived.
+  //
+  template <class OtherDerived>
+  SOPHUS_FUNC SO3(SO3Base<OtherDerived> const& other)
+      : unit_quaternion_(other.unit_quaternion()) {}
+
+  // Constructor from rotation matrix
+  //
+  // Precondition: rotation matrix needs to be orthogonal with determinant of 1.
+  //
+  SOPHUS_FUNC SO3(Transformation const& R) : unit_quaternion_(R) {
+    SOPHUS_ENSURE(isOrthogonal(R), "R is not orthogonal:\n %",
+                  R * R.transpose());
+    SOPHUS_ENSURE(R.determinant() > Scalar(0), "det(R) is not positive: %",
+                  R.determinant());
+  }
+
+  // Constructor from quaternion
+  //
+  // Precondition: quaternion must not be close to zero.
+  //
+  template <class D>
+  SOPHUS_FUNC explicit SO3(Eigen::QuaternionBase<D> const& quat)
+      : unit_quaternion_(quat) {
+    static_assert(
+        std::is_same<typename Eigen::QuaternionBase<D>::Scalar, Scalar>::value,
+        "Input must be of same scalar type");
+    Base::normalize();
+  }
+
+  // Accessor of unit quaternion.
+  //
+  SOPHUS_FUNC QuaternionMember const& unit_quaternion() const {
+    return unit_quaternion_;
+  }
+
+  // Returns derivative of exp(x) wrt. x.
+  //
+  SOPHUS_FUNC static Sophus::Matrix<Scalar, DoF, num_parameters> Dx_exp_x(
+      Tangent const& omega) {
+    using std::cos;
+    using std::exp;
+    using std::sin;
+    using std::sqrt;
+    Scalar const c0 = omega[0] * omega[0];
+    Scalar const c1 = omega[1] * omega[1];
+    Scalar const c2 = omega[2] * omega[2];
+    Scalar const c3 = c0 + c1 + c2;
+
+    if (c3 < Constants<Scalar>::epsilon()) {
+      return Dx_exp_x_at_0();
+    }
+    Scalar const c4 = sqrt(c3);
+    Scalar const c5 = Scalar(1) / c4;
+    Scalar const c6 = Scalar(0.5) * c4;
+    Scalar const c7 = sin(c6);
+    Scalar const c8 = c5 * c7;
+    Scalar const c9 = pow(c3, Scalar(-3.0 / 2.0));
+    Scalar const c10 = c7 * c9;
+    Scalar const c11 = Scalar(1.0) / c3;
+    Scalar const c12 = cos(c6);
+    Scalar const c13 = Scalar(0.5) * c11 * c12;
+    Scalar const c14 = c7 * c9 * omega[0];
+    Scalar const c15 = Scalar(0.5) * c11 * c12 * omega[0];
+    Scalar const c16 = -c14 * omega[1] + c15 * omega[1];
+    Scalar const c17 = -c14 * omega[2] + c15 * omega[2];
+    Scalar const c18 = Scalar(0.5) * c5 * c7;
+    Scalar const c19 = omega[1] * omega[2];
+    Scalar const c20 = -c10 * c19 + c13 * c19;
+    Sophus::Matrix<Scalar, DoF, num_parameters> J;
+    J(0, 0) = -c0 * c10 + c0 * c13 + c8;
+    J(0, 1) = c16;
+    J(0, 2) = c17;
+    J(0, 3) = -c18 * omega[0];
+    J(1, 0) = c16;
+    J(1, 1) = -c1 * c10 + c1 * c13 + c8;
+    J(1, 2) = c20;
+    J(1, 3) = -c18 * omega[1];
+    J(2, 0) = c17;
+    J(2, 1) = c20;
+    J(2, 2) = -c10 * c2 + c13 * c2 + c8;
+    J(2, 3) = -c18 * omega[2];
+    return J;
+  }
+
+  // Returns derivative of exp(x) wrt. x_i at x=0.
+  //
+  SOPHUS_FUNC static Sophus::Matrix<Scalar, DoF, num_parameters>
+  Dx_exp_x_at_0() {
+    Sophus::Matrix<Scalar, DoF, num_parameters> J;
+    // clang-format off
+    J <<  Scalar(0.5),   Scalar(0),   Scalar(0), Scalar(0),
+            Scalar(0), Scalar(0.5),   Scalar(0), Scalar(0),
+            Scalar(0),   Scalar(0), Scalar(0.5), Scalar(0);
+    // clang-format on
+    return J;
+  }
+
+  // Returns derivative of exp(x).matrix() wrt. x_i at x=0.
+  //
+  SOPHUS_FUNC static Transformation Dxi_exp_x_matrix_at_0(int i) {
+    return generator(i);
   }
 
   // Group exponential
@@ -321,10 +533,11 @@ class SO3Base {
   //
   SOPHUS_FUNC static SO3<Scalar> expAndTheta(Tangent const& omega,
                                              Scalar* theta) {
-    using std::sqrt;
+    SOPHUS_ENSURE(theta != nullptr, "must not be nullptr.");
     using std::abs;
-    using std::sin;
     using std::cos;
+    using std::sin;
+    using std::sqrt;
     Scalar theta_sq = omega.squaredNorm();
     *theta = sqrt(theta_sq);
     Scalar half_theta = Scalar(0.5) * (*theta);
@@ -335,23 +548,31 @@ class SO3Base {
       Scalar theta_po4 = theta_sq * theta_sq;
       imag_factor = Scalar(0.5) - Scalar(1.0 / 48.0) * theta_sq +
                     Scalar(1.0 / 3840.0) * theta_po4;
-      real_factor =
-          Scalar(1) - Scalar(1.0 / 8.0) * theta_sq + Scalar(1.0 / 384.0) * theta_po4;
+      real_factor = Scalar(1) - Scalar(1.0 / 8.0) * theta_sq +
+                    Scalar(1.0 / 384.0) * theta_po4;
     } else {
       Scalar sin_half_theta = sin(half_theta);
       imag_factor = sin_half_theta / (*theta);
       real_factor = cos(half_theta);
     }
 
-    Derived q;
+    SO3 q;
     q.unit_quaternion_nonconst() =
-        QuaternionType(real_factor, imag_factor * omega.x(),
-                       imag_factor * omega.y(), imag_factor * omega.z());
+        QuaternionMember(real_factor, imag_factor * omega.x(),
+                         imag_factor * omega.y(), imag_factor * omega.z());
     SOPHUS_ENSURE(abs(q.unit_quaternion().squaredNorm() - Scalar(1)) <
                       Sophus::Constants<Scalar>::epsilon(),
                   "SO3::exp failed! omega: %, real: %, img: %",
                   omega.transpose(), real_factor, imag_factor);
     return q;
+  }
+
+  // Returns closest SO3 given arbirary 3x3 matrix.
+  //
+  template <class S = Scalar>
+  static SOPHUS_FUNC enable_if_t<std::is_floating_point<S>::value, SO3>
+  fitToSO3(Transformation const& R) {
+    return SO3(::Sophus::makeRotationMatrix(R));
   }
 
   // Returns the ith infinitesimal generators of SO(3).
@@ -378,20 +599,6 @@ class SO3Base {
     e.setZero();
     e[i] = Scalar(1);
     return hat(e);
-  }
-
-  // Returns the ith generator of internal SU(2) representation.
-  //
-  // Precondition: ``i`` must be 0, 1 or 2.
-  //
-  SOPHUS_FUNC static void internalGenerator(
-      int i, Eigen::Quaternion<Scalar>* internal_gen_q) {
-    SOPHUS_ENSURE(i >= 0 && i <= 2, "i should be in range [0,2]");
-    SOPHUS_ENSURE(internal_gen_q != NULL,
-                  "internal_gen_q must not be the null pointer");
-    // Factor of 0.5 since SU(2) is a double cover of SO(3).
-    internal_gen_q->coeffs().setZero();
-    internal_gen_q->coeffs()[i] = Scalar(0.5);
   }
 
   // hat-operator
@@ -437,153 +644,6 @@ class SO3Base {
     return omega1.cross(omega2);
   }
 
-  // Logarithmic map
-  //
-  // Computes the logarithm, the inverse of the group exponential which maps
-  // element of the group (rotation matrices) to elements of the tangent space
-  // (rotation-vector).
-  //
-  // To be specific, this function computes ``vee(logmat(.))`` with
-  // ``logmat(.)`` being the matrix logarithm and ``vee(.)`` the vee-operator
-  // of SO(3).
-  //
-  SOPHUS_FUNC static Tangent log(SO3<Scalar> const& other) {
-    Scalar theta;
-    return logAndTheta(other, &theta);
-  }
-
-  // As above, but also returns ``theta = |omega|`` as out-parameter.
-  //
-  SOPHUS_FUNC static Tangent logAndTheta(SO3<Scalar> const& other,
-                                         Scalar* theta) {
-    using std::sqrt;
-    using std::atan;
-    using std::abs;
-    Scalar squared_n = other.unit_quaternion().vec().squaredNorm();
-    Scalar n = sqrt(squared_n);
-    Scalar w = other.unit_quaternion().w();
-
-    Scalar two_atan_nbyw_by_n;
-
-    // Atan-based log thanks to
-    //
-    // C. Hertzberg et al.:
-    // "Integrating Generic Sensor Fusion Algorithms with Sound State
-    // Representation through Encapsulation of Manifolds"
-    // Information Fusion, 2011
-
-    if (n < Constants<Scalar>::epsilon()) {
-      // If quaternion is normalized and n=0, then w should be 1;
-      // w=0 should never happen here!
-      SOPHUS_ENSURE(abs(w) >= Constants<Scalar>::epsilon(),
-                    "Quaternion (%) should be normalized!",
-                    other.unit_quaternion().coeffs().transpose());
-      Scalar squared_w = w * w;
-      two_atan_nbyw_by_n =
-          Scalar(2) / w - Scalar(2) * (squared_n) / (w * squared_w);
-    } else {
-      if (abs(w) < Constants<Scalar>::epsilon()) {
-        if (w > Scalar(0)) {
-          two_atan_nbyw_by_n = Constants<Scalar>::pi() / n;
-        } else {
-          two_atan_nbyw_by_n = -Constants<Scalar>::pi() / n;
-        }
-      } else {
-        two_atan_nbyw_by_n = Scalar(2) * atan(n / w) / n;
-      }
-    }
-
-    *theta = two_atan_nbyw_by_n * n;
-
-    return two_atan_nbyw_by_n * other.unit_quaternion().vec();
-  }
-
-  // vee-operator
-  //
-  // It takes the 3x3-matrix representation ``Omega`` and maps it to the
-  // corresponding vector representation of Lie algebra.
-  //
-  // This is the inverse of the hat-operator, see above.
-  //
-  // Precondition: ``Omega`` must have the following structure:
-  //
-  //                |  0 -c  b |
-  //                |  c  0 -a |
-  //                | -b  a  0 | .
-  //
-  SOPHUS_FUNC static Tangent vee(Transformation const& Omega) {
-    return Tangent(Omega(2, 1), Omega(0, 2), Omega(1, 0));
-  }
-
- private:
-  // Mutator of unit_quaternion is private to ensure class invariant. That is
-  // the quaternion must stay close to unit length.
-  //
-  SOPHUS_FUNC QuaternionType& unit_quaternion_nonconst() {
-    return static_cast<Derived*>(this)->unit_quaternion_nonconst();
-  }
-};
-
-// SO3 default type - Constructors and default storage for SO3 Type.
-template <class Scalar_, int Options>
-class SO3 : public SO3Base<SO3<Scalar_, Options>> {
-  using Base = SO3Base<SO3<Scalar_, Options>>;
-
- public:
-  using Scalar = Scalar_;
-  using Transformation = typename Base::Transformation;
-  using Point = typename Base::Point;
-  using Tangent = typename Base::Tangent;
-  using Adjoint = typename Base::Adjoint;
-  using QuaternionMember = Eigen::Quaternion<Scalar, Options>;
-
-  // ``Base`` is friend so unit_quaternion_nonconst can be accessed from
-  // ``Base``.
-  friend class SO3Base<SO3<Scalar, Options>>;
-
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
-  // Default constructor initialize unit quaternion to identity rotation.
-  //
-  SOPHUS_FUNC SO3()
-      : unit_quaternion_(Scalar(1), Scalar(0), Scalar(0), Scalar(0)) {}
-
-  // Copy constructor
-  //
-  template <class OtherDerived>
-  SOPHUS_FUNC SO3(SO3Base<OtherDerived> const& other)
-      : unit_quaternion_(other.unit_quaternion()) {}
-
-  // Constructor from rotation matrix
-  //
-  // Precondition: rotation matrix needs to be orthogonal with determinant of 1.
-  //
-  SOPHUS_FUNC SO3(Transformation const& R) : unit_quaternion_(R) {
-    SOPHUS_ENSURE(isOrthogonal(R), "R is not orthogonal:\n %",
-                  R * R.transpose());
-    SOPHUS_ENSURE(R.determinant() > Scalar(0), "det(R) is not positive: %",
-                  R.determinant());
-  }
-
-  // Returns closest SO3 given arbirary 3x3 matrix.
-  //
-  static SOPHUS_FUNC SO3 fitToSO3(Transformation const& R) {
-    return SO3(::Sophus::makeRotationMatrix(R));
-  }
-
-  // Constructor from quaternion
-  //
-  // Precondition: quaternion must not be close to zero.
-  //
-  template <class D>
-  SOPHUS_FUNC explicit SO3(Eigen::QuaternionBase<D> const& quat)
-      : unit_quaternion_(quat) {
-    static_assert(
-        std::is_same<typename Eigen::QuaternionBase<D>::Scalar, Scalar>::value,
-        "Input must be of same scalar type");
-    Base::normalize();
-  }
-
   // Contruct x-axis rotation.
   //
   static SOPHUS_FUNC SO3 rotX(Scalar const& x) {
@@ -623,10 +683,21 @@ class SO3 : public SO3Base<SO3<Scalar_, Options>> {
     return SO3::exp(uniform(generator) * axis);
   }
 
-  // Accessor of unit quaternion.
+  // vee-operator
   //
-  SOPHUS_FUNC QuaternionMember const& unit_quaternion() const {
-    return unit_quaternion_;
+  // It takes the 3x3-matrix representation ``Omega`` and maps it to the
+  // corresponding vector representation of Lie algebra.
+  //
+  // This is the inverse of the hat-operator, see above.
+  //
+  // Precondition: ``Omega`` must have the following structure:
+  //
+  //                |  0 -c  b |
+  //                |  c  0 -a |
+  //                | -b  a  0 | .
+  //
+  SOPHUS_FUNC static Tangent vee(Transformation const& Omega) {
+    return Tangent(Omega(2, 1), Omega(0, 2), Omega(1, 0));
   }
 
  protected:
@@ -642,7 +713,6 @@ class SO3 : public SO3Base<SO3<Scalar_, Options>> {
 }  // namespace Sophus
 
 namespace Eigen {
-
 // Specialization of Eigen::Map for ``SO3``.
 //
 // Allows us to wrap SO3 objects around POD array (e.g. external c style
@@ -663,7 +733,10 @@ class Map<Sophus::SO3<Scalar_>, Options>
   // ``Base``.
   friend class Sophus::SO3Base<Map<Sophus::SO3<Scalar_>, Options>>;
 
+  // LCOV_EXCL_START
   EIGEN_INHERIT_ASSIGNMENT_EQUAL_OPERATOR(Map)
+  // LCOV_EXCL_STOP
+
   using Base::operator*=;
   using Base::operator*;
 
@@ -703,7 +776,6 @@ class Map<Sophus::SO3<Scalar_> const, Options>
   using Tangent = typename Base::Tangent;
   using Adjoint = typename Base::Adjoint;
 
-  EIGEN_INHERIT_ASSIGNMENT_EQUAL_OPERATOR(Map)
   using Base::operator*=;
   using Base::operator*;
 
@@ -721,6 +793,8 @@ class Map<Sophus::SO3<Scalar_> const, Options>
   //
   Map<Eigen::Quaternion<Scalar> const, Options> const unit_quaternion_;
 };
+}  // namespace Eigen
+
 
 
 template <typename Derived>
@@ -729,6 +803,5 @@ typename Sophus::SO3Base<Derived>::Point operator/(const typename Sophus::SO3Bas
   return so3.unit_quaternion().conjugate() * pt;
 }
 
-}
 
 #endif

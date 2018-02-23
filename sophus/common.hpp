@@ -112,6 +112,8 @@ void ensureFailed(char const* function, char const* file, int line,
                 SOPHUS_FUNCTION, __FILE__, __LINE__, \
                 Sophus::details::FormatString(##__VA_ARGS__).c_str()))
 #else
+// LCOV_EXCL_START
+
 namespace Sophus {
 template <class... Args>
 SOPHUS_FUNC void defaultEnsure(char const* function, char const* file, int line,
@@ -127,9 +129,12 @@ SOPHUS_FUNC void defaultEnsure(char const* function, char const* file, int line,
 #endif
 }
 }  // namespace Sophus
-#define SOPHUS_ENSURE(expr, ...)                                         \
-  ((expr) ? ((void)0) : Sophus::defaultEnsure(SOPHUS_FUNCTION, __FILE__, \
-                                              __LINE__, ##__VA_ARGS__))
+
+// LCOV_EXCL_STOP
+#define SOPHUS_ENSURE(expr, ...)                                       \
+  ((expr) ? ((void)0)                                                  \
+          : Sophus::defaultEnsure(SOPHUS_FUNCTION, __FILE__, __LINE__, \
+                                  ##__VA_ARGS__))
 #endif
 
 namespace Sophus {
@@ -137,6 +142,11 @@ namespace Sophus {
 template <class Scalar>
 struct Constants {
   SOPHUS_FUNC static Scalar epsilon() { return Scalar(1e-10); }
+
+  SOPHUS_FUNC static Scalar epsilonSqrt() {
+    using std::sqrt;
+    return sqrt(epsilon());
+  }
 
   SOPHUS_FUNC static Scalar pi() { return Scalar(M_PI); }
 };
@@ -146,6 +156,8 @@ struct Constants<float> {
   SOPHUS_FUNC static float constexpr epsilon() {
     return static_cast<float>(1e-5);
   }
+
+  SOPHUS_FUNC static float epsilonSqrt() { return std::sqrt(epsilon()); }
 
   SOPHUS_FUNC static float constexpr pi() { return static_cast<float>(M_PI); }
 };

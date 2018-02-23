@@ -8,13 +8,19 @@
 
 #include <sophus/average.hpp>
 #include <sophus/interpolate.hpp>
+#include <sophus/num_diff.hpp>
 #include <sophus/test_macros.hpp>
+
+#ifdef SOPHUS_CERES
+#include <ceres/jet.h>
+#endif
 
 namespace Sophus {
 
-template <class LieGroup>
+template <class LieGroup_>
 class LieGroupTests {
  public:
+  using LieGroup = LieGroup_;
   using Scalar = typename LieGroup::Scalar;
   using Transformation = typename LieGroup::Transformation;
   using Tangent = typename LieGroup::Tangent;
@@ -23,6 +29,7 @@ class LieGroupTests {
   using Adjoint = typename LieGroup::Adjoint;
   static int constexpr N = LieGroup::N;
   static int constexpr DoF = LieGroup::DoF;
+  static int constexpr num_parameters = LieGroup::num_parameters;
 
   LieGroupTests(
       std::vector<LieGroup, Eigen::aligned_allocator<LieGroup>> const&
@@ -47,11 +54,140 @@ class LieGroupTests {
         Tangent ad1 = Ad * x;
         Tangent ad2 = LieGroup::vee(T * LieGroup::hat(x) *
                                     group_vec_[i].inverse().matrix());
-        SOPHUS_TEST_APPROX(passed, ad1, ad2, 20. * kSmallEps,
+        SOPHUS_TEST_APPROX(passed, ad1, ad2, Scalar(10) * kSmallEps,
                            "Adjoint case %, %", i, j);
       }
     }
     return passed;
+  }
+
+  bool contructorAndAssignmentTest() {
+    bool passed = true;
+    for (LieGroup foo_T_bar : group_vec_) {
+      LieGroup foo_T2_bar = foo_T_bar;
+      SOPHUS_TEST_APPROX(passed, foo_T_bar.matrix(), foo_T2_bar.matrix(),
+                         kSmallEps, "Copy constructor: %\nvs\n %",
+                         transpose(foo_T_bar.matrix()),
+                         transpose(foo_T2_bar.matrix()));
+      LieGroup foo_T3_bar;
+      foo_T3_bar = foo_T_bar;
+      SOPHUS_TEST_APPROX(passed, foo_T_bar.matrix(), foo_T3_bar.matrix(),
+                         kSmallEps, "Copy assignment: %\nvs\n %",
+                         transpose(foo_T_bar.matrix()),
+                         transpose(foo_T3_bar.matrix()));
+
+      LieGroup foo_T4_bar(foo_T_bar.matrix());
+      SOPHUS_TEST_APPROX(
+          passed, foo_T_bar.matrix(), foo_T4_bar.matrix(), kSmallEps,
+          "Constructor from homogeneous matrix: %\nvs\n %",
+          transpose(foo_T_bar.matrix()), transpose(foo_T4_bar.matrix()));
+
+      Eigen::Map<LieGroup> foo_Tmap_bar(foo_T_bar.data());
+      LieGroup foo_T5_bar = foo_Tmap_bar;
+      SOPHUS_TEST_APPROX(
+          passed, foo_T_bar.matrix(), foo_T5_bar.matrix(), kSmallEps,
+          "Assignment from Eigen::Map type: %\nvs\n %",
+          transpose(foo_T_bar.matrix()), transpose(foo_T5_bar.matrix()));
+
+      Eigen::Map<LieGroup const> foo_Tcmap_bar(foo_T_bar.data());
+      LieGroup foo_T6_bar;
+      foo_T6_bar = foo_Tcmap_bar;
+      SOPHUS_TEST_APPROX(
+          passed, foo_T_bar.matrix(), foo_T5_bar.matrix(), kSmallEps,
+          "Assignment from Eigen::Map type: %\nvs\n %",
+          transpose(foo_T_bar.matrix()), transpose(foo_T5_bar.matrix()));
+
+      LieGroup I;
+      Eigen::Map<LieGroup> foo_Tmap2_bar(I.data());
+      foo_Tmap2_bar = foo_T_bar;
+      SOPHUS_TEST_APPROX(passed, foo_Tmap2_bar.matrix(), foo_T_bar.matrix(),
+                         kSmallEps, "Assignment to Eigen::Map type: %\nvs\n %",
+                         transpose(foo_Tmap2_bar.matrix()),
+                         transpose(foo_T_bar.matrix()));
+    }
+    return passed;
+  }
+
+  bool derivativeTest() {
+    bool passed = true;
+
+    LieGroup g;
+    for (int i = 0; i < DoF; ++i) {
+      Transformation Gi = g.Dxi_exp_x_matrix_at_0(i);
+      Transformation Gi2 = curveNumDiff(
+          [i](Scalar xi) -> Transformation {
+            Tangent x;
+            setToZero(x);
+            setElementAt(x, xi, i);
+            return LieGroup::exp(x).matrix();
+          },
+          Scalar(0));
+      SOPHUS_TEST_APPROX(passed, Gi, Gi2, kSmallEpsSqrt,
+                         "Dxi_exp_x_matrix_at_ case %", i);
+    }
+
+    return passed;
+  }
+
+  template <class G = LieGroup>
+  enable_if_t<std::is_same<G, Sophus::SO2<Scalar>>::value ||
+                  std::is_same<G, Sophus::SO3<Scalar>>::value ||
+                  std::is_same<G, Sophus::SE2<Scalar>>::value ||
+                  std::is_same<G, Sophus::SE3<Scalar>>::value,
+              bool>
+  additionalDerivativeTest() {
+    bool passed = true;
+    for (size_t j = 0; j < tangent_vec_.size(); ++j) {
+      Tangent a = tangent_vec_[j];
+      Eigen::Matrix<Scalar, DoF, num_parameters> J = LieGroup::Dx_exp_x(a);
+      Eigen::Matrix<Scalar, DoF, num_parameters> J_num =
+          vectorFieldNumDiff<Scalar, DoF, num_parameters>(
+              [](Tangent const& x) -> Sophus::Vector<Scalar, num_parameters> {
+                return LieGroup::exp(x).params();
+              },
+              a);
+
+      SOPHUS_TEST_APPROX(passed, J, J_num, 3 * kSmallEpsSqrt,
+                         "Dx_exp_x case: %", j);
+    }
+
+    Tangent o;
+    setToZero(o);
+    Eigen::Matrix<Scalar, DoF, num_parameters> J = LieGroup::Dx_exp_x_at_0();
+    Eigen::Matrix<Scalar, DoF, num_parameters> J_num =
+        vectorFieldNumDiff<Scalar, DoF, num_parameters>(
+            [](Tangent const& x) -> Sophus::Vector<Scalar, num_parameters> {
+              return LieGroup::exp(x).params();
+            },
+            o);
+    SOPHUS_TEST_APPROX(passed, J, J_num, kSmallEpsSqrt, "Dx_exp_x_at_0");
+
+    for (size_t i = 0; i < group_vec_.size(); ++i) {
+      LieGroup T = group_vec_[i];
+
+      Eigen::Matrix<Scalar, DoF, num_parameters> J = T.Dx_this_mul_exp_x_at_0();
+      Eigen::Matrix<Scalar, DoF, num_parameters> J_num =
+          vectorFieldNumDiff<Scalar, DoF, num_parameters>(
+              [T](Tangent const& x) -> Sophus::Vector<Scalar, num_parameters> {
+                return (T * LieGroup::exp(x)).params();
+              },
+              o);
+
+      SOPHUS_TEST_APPROX(passed, J, J_num, kSmallEpsSqrt,
+                         "Dx_this_mul_exp_x_at_0 case: %", i);
+    }
+
+    return passed;
+  }
+
+  template <class G = LieGroup>
+  enable_if_t<!std::is_same<G, Sophus::SO2<Scalar>>::value &&
+                  !std::is_same<G, Sophus::SO3<Scalar>>::value &&
+                  !std::is_same<G, Sophus::SE2<Scalar>>::value &&
+                  !std::is_same<G, Sophus::SE3<Scalar>>::value,
+              bool>
+  additionalDerivativeTest() {
+    return true;
   }
 
   bool expLogTest() {
@@ -72,7 +208,7 @@ class LieGroupTests {
       Tangent omega = tangent_vec_[i];
       Transformation exp_x = LieGroup::exp(omega).matrix();
       Transformation expmap_hat_x = (LieGroup::hat(omega)).exp();
-      SOPHUS_TEST_APPROX(passed, exp_x, expmap_hat_x, 10. * kSmallEps,
+      SOPHUS_TEST_APPROX(passed, exp_x, expmap_hat_x, Scalar(10) * kSmallEps,
                          "expmap(hat(x)) - exp(x) case: %", i);
     }
     return passed;
@@ -158,8 +294,9 @@ class LieGroupTests {
 
   bool interpolateAndMeanTest() {
     bool passed = true;
+    using std::sqrt;
     Scalar const eps = Constants<Scalar>::epsilon();
-    Scalar const sqrt_eps = std::sqrt(eps);
+    Scalar const sqrt_eps = sqrt(eps);
     // TODO: Improve accuracy of ``interpolate`` (and hence ``exp`` and ``log``)
     //       so that we can use more accurate bounds in these tests, i.e.
     //       ``eps`` instead of ``sqrt_eps``.
@@ -175,7 +312,8 @@ class LieGroupTests {
                            sqrt_eps);
       }
     }
-    for (Scalar alpha : {0.1, 0.5, 0.75, 0.99}) {
+    for (Scalar alpha :
+         {Scalar(0.1), Scalar(0.5), Scalar(0.75), Scalar(0.99)}) {
       for (LieGroup const& foo_T_bar : group_vec_) {
         for (LieGroup const& foo_T_baz : group_vec_) {
           LieGroup foo_T_quiz = interpolate(foo_T_bar, foo_T_baz, alpha);
@@ -277,28 +415,48 @@ class LieGroupTests {
     std::default_random_engine engine;
     for (int i = 0; i < 100; ++i) {
       LieGroup g = LieGroup::sampleUniform(engine);
-      std::cout << g.matrix() << std::endl << std::endl;
+      SOPHUS_TEST_EQUAL(passed, g.params(), g.params());
     }
     return passed;
   }
 
-  bool doAllTestsPass() {
+  template <class S = Scalar>
+  enable_if_t<std::is_floating_point<S>::value, bool> doAllTestsPass() {
+    return doesLargeTestSetPass();
+  }
+
+  template <class S = Scalar>
+  enable_if_t<!std::is_floating_point<S>::value, bool> doAllTestsPass() {
+    return doesSmallTestSetPass();
+  }
+
+ private:
+  bool doesSmallTestSetPass() {
     bool passed = true;
     passed &= adjointTest();
+    passed &= contructorAndAssignmentTest();
     passed &= expLogTest();
-    passed &= expMapTest();
     passed &= groupActionTest();
     passed &= lineActionTest();
     passed &= lieBracketTest();
     passed &= veeHatTest();
     passed &= newDeleteSmokeTest();
+    return passed;
+  }
+
+  bool doesLargeTestSetPass() {
+    bool passed = true;
+    passed &= doesSmallTestSetPass();
+    passed &= additionalDerivativeTest();
+    passed &= derivativeTest();
+    passed &= expMapTest();
     passed &= interpolateAndMeanTest();
     passed &= testRandomSmoke();
     return passed;
   }
 
- private:
   Scalar const kSmallEps = Constants<Scalar>::epsilon();
+  Scalar const kSmallEpsSqrt = Constants<Scalar>::epsilonSqrt();
 
   Eigen::Matrix<Scalar, N - 1, 1> map(
       Eigen::Matrix<Scalar, N, N> const& T,
@@ -317,28 +475,41 @@ class LieGroupTests {
   std::vector<Point, Eigen::aligned_allocator<Point>> point_vec_;
 };
 
-template <class T>
-std::vector<SE3<T>, Eigen::aligned_allocator<SE3<T>>> getTestSE3s() {
-  T const kPi = Constants<T>::pi();
-  std::vector<SE3<T>, Eigen::aligned_allocator<SE3<T>>> se3_vec;
+template <class Scalar>
+std::vector<SE3<Scalar>, Eigen::aligned_allocator<SE3<Scalar>>> getTestSE3s() {
+  Scalar const kPi = Constants<Scalar>::pi();
+  std::vector<SE3<Scalar>, Eigen::aligned_allocator<SE3<Scalar>>> se3_vec;
+  se3_vec.push_back(SE3<Scalar>(
+      SO3<Scalar>::exp(Vector3<Scalar>(Scalar(0.2), Scalar(0.5), Scalar(0.0))),
+      Vector3<Scalar>(Scalar(0), Scalar(0), Scalar(0))));
+  se3_vec.push_back(SE3<Scalar>(
+      SO3<Scalar>::exp(Vector3<Scalar>(Scalar(0.2), Scalar(0.5), Scalar(-1.0))),
+      Vector3<Scalar>(Scalar(10), Scalar(0), Scalar(0))));
+  se3_vec.push_back(SE3<Scalar>::trans(Scalar(0), Scalar(100), Scalar(5)));
+  se3_vec.push_back(SE3<Scalar>::rotZ(Scalar(0.00001)));
   se3_vec.push_back(
-      SE3<T>(SO3<T>::exp(Vector3<T>(0.2, 0.5, 0.0)), Vector3<T>(0, 0, 0)));
+      SE3<Scalar>::trans(Scalar(0), Scalar(-0.00000001), Scalar(0.0000000001)) *
+      SE3<Scalar>::rotZ(Scalar(0.00001)));
+  se3_vec.push_back(SE3<Scalar>::transX(Scalar(0.01)) *
+                    SE3<Scalar>::rotZ(Scalar(0.00001)));
+  se3_vec.push_back(SE3<Scalar>::trans(Scalar(4), Scalar(-5), Scalar(0)) *
+                    SE3<Scalar>::rotX(kPi));
   se3_vec.push_back(
-      SE3<T>(SO3<T>::exp(Vector3<T>(0.2, 0.5, -1.0)), Vector3<T>(10, 0, 0)));
-  se3_vec.push_back(SE3<T>::trans(0, 100, 5));
-  se3_vec.push_back(SE3<T>::rotZ(0.00001));
-  se3_vec.push_back(SE3<T>::trans(0, -0.00000001, 0.0000000001) *
-                    SE3<T>::rotZ(0.00001));
-  se3_vec.push_back(SE3<T>::transX(0.01) * SE3<T>::rotZ(0.00001));
-  se3_vec.push_back(SE3<T>::trans(4, -5, 0) * SE3<T>::rotX(kPi));
+      SE3<Scalar>(SO3<Scalar>::exp(
+                      Vector3<Scalar>(Scalar(0.2), Scalar(0.5), Scalar(0.0))),
+                  Vector3<Scalar>(Scalar(0), Scalar(0), Scalar(0))) *
+      SE3<Scalar>::rotX(kPi) *
+      SE3<Scalar>(SO3<Scalar>::exp(Vector3<Scalar>(Scalar(-0.2), Scalar(-0.5),
+                                                   Scalar(-0.0))),
+                  Vector3<Scalar>(Scalar(0), Scalar(0), Scalar(0))));
   se3_vec.push_back(
-      SE3<T>(SO3<T>::exp(Vector3<T>(0.2, 0.5, 0.0)), Vector3<T>(0, 0, 0)) *
-      SE3<T>::rotX(kPi) *
-      SE3<T>(SO3<T>::exp(Vector3<T>(-0.2, -0.5, -0.0)), Vector3<T>(0, 0, 0)));
-  se3_vec.push_back(
-      SE3<T>(SO3<T>::exp(Vector3<T>(0.3, 0.5, 0.1)), Vector3<T>(2, 0, -7)) *
-      SE3<T>::rotX(kPi) *
-      SE3<T>(SO3<T>::exp(Vector3<T>(-0.3, -0.5, -0.1)), Vector3<T>(0, 6, 0)));
+      SE3<Scalar>(SO3<Scalar>::exp(
+                      Vector3<Scalar>(Scalar(0.3), Scalar(0.5), Scalar(0.1))),
+                  Vector3<Scalar>(Scalar(2), Scalar(0), Scalar(-7))) *
+      SE3<Scalar>::rotX(kPi) *
+      SE3<Scalar>(SO3<Scalar>::exp(Vector3<Scalar>(Scalar(-0.3), Scalar(-0.5),
+                                                   Scalar(-0.1))),
+                  Vector3<Scalar>(Scalar(0), Scalar(6), Scalar(0))));
   return se3_vec;
 }
 
@@ -356,5 +527,5 @@ std::vector<SE2<T>, Eigen::aligned_allocator<SE2<T>>> getTestSE2s() {
                     SE2<T>(SO2<T>(-0.3), Vector2<T>(0, 6)));
   return se2_vec;
 }
-}
+}  // namespace Sophus
 #endif  // TESTS_HPP

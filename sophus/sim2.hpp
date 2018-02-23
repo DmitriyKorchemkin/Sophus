@@ -9,7 +9,7 @@ template <class Scalar_, int Options = 0>
 class Sim2;
 using Sim2d = Sim2<double>;
 using Sim2f = Sim2<float>;
-}
+}  // namespace Sophus
 
 namespace Eigen {
 namespace internal {
@@ -112,9 +112,34 @@ class Sim2Base {
 
   // Logarithmic map
   //
-  // Returns tangent space representation of the instance.
+  // Computes the logarithm, the inverse of the group exponential which maps
+  // element of the group (rigid body transformations) to elements of the
+  // tangent space (twist).
   //
-  SOPHUS_FUNC Tangent log() const { return log(*this); }
+  // To be specific, this function computes ``vee(logmat(.))`` with
+  // ``logmat(.)`` being the matrix logarithm and ``vee(.)`` the vee-operator
+  // of Sim(2).
+  //
+  SOPHUS_FUNC Tangent log() const {
+    // The derivation of the closed-form Sim(2) logarithm for is done
+    // analogously to the closed-form solution of the SE(2) logarithm, see
+    // J. Gallier, D. Xu, "Computing exponentials of skew symmetric matrices and
+    // logarithms of orthogonal matrices", IJRA 2002.
+    // https://pdfs.semanticscholar.org/cfe3/e4b39de63c8cabd89bf3feff7f5449fc981d.pdf
+    // (Sec. 6., pp. 8)
+    Tangent res;
+    Vector2<Scalar> const theta_sigma = rxso2().log();
+    Scalar const theta = theta_sigma[0];
+    Scalar const sigma = theta_sigma[1];
+    Matrix2<Scalar> const Omega = SO2<Scalar>::hat(theta);
+    Matrix2<Scalar> const W_inv =
+        details::calcWInv<Scalar, 2>(Omega, theta, sigma, scale());
+
+    res.segment(0, 2) = W_inv * translation();
+    res[2] = theta;
+    res[3] = sigma;
+    return res;
+  }
 
   // Returns 3x3 matrix representation of the instance.
   //
@@ -144,6 +169,10 @@ class Sim2Base {
   }
 
   // Assignment operator.
+  //
+  SOPHUS_FUNC Sim2Base& operator=(Sim2Base const& other) = default;
+
+  // Assignment-like operator from OtherDerived.
   //
   template <class OtherDerived>
   SOPHUS_FUNC Sim2Base<Derived>& operator=(
@@ -187,6 +216,17 @@ class Sim2Base {
   SOPHUS_FUNC Line operator*(Line const& l) const {
     Line rotatedLine = rxso2() * l;
     return Line(rotatedLine.origin() + translation(), rotatedLine.direction());
+  }
+
+  // Returns internal parameters of Sim(2).
+  //
+  // It returns (c[0], c[1], t[0], t[1]),
+  // with c being the complex number, t the translation 3-vector.
+  //
+  SOPHUS_FUNC Sophus::Vector<Scalar, num_parameters> params() const {
+    Sophus::Vector<Scalar, num_parameters> p;
+    p << rxso2().params(), translation();
+    return p;
   }
 
   // In-place group multiplication.
@@ -268,10 +308,114 @@ class Sim2Base {
   SOPHUS_FUNC TranslationType const& translation() const {
     return static_cast<Derived const*>(this)->translation();
   }
+};
 
-  ////////////////////////////////////////////////////////////////////////////
-  // public static functions
-  ////////////////////////////////////////////////////////////////////////////
+// Sim2 default type - Constructors and default storage for Sim2 Type.
+template <class Scalar_, int Options>
+class Sim2 : public Sim2Base<Sim2<Scalar_, Options>> {
+  using Base = Sim2Base<Sim2<Scalar_, Options>>;
+
+ public:
+  using Scalar = Scalar_;
+  using Transformation = typename Base::Transformation;
+  using Point = typename Base::Point;
+  using Tangent = typename Base::Tangent;
+  using Adjoint = typename Base::Adjoint;
+  using RxSo2Member = RxSO2<Scalar, Options>;
+  using TranslationMember = Vector2<Scalar, Options>;
+
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+  // Default constructor initialize similarity transform to the identity.
+  //
+  SOPHUS_FUNC Sim2();
+
+  // Copy constructor
+  //
+  SOPHUS_FUNC Sim2(Sim2 const& other) = default;
+
+  // Copy-like constructor from OtherDerived.
+  //
+  template <class OtherDerived>
+  SOPHUS_FUNC Sim2(Sim2Base<OtherDerived> const& other)
+      : rxso2_(other.rxso2()), translation_(other.translation()) {
+    static_assert(std::is_same<typename OtherDerived::Scalar, Scalar>::value,
+                  "must be same Scalar type");
+  }
+
+  // Constructor from RxSO2 and translation vector
+  //
+  template <class OtherDerived, class D>
+  SOPHUS_FUNC Sim2(RxSO2Base<OtherDerived> const& rxso2,
+                   Eigen::MatrixBase<D> const& translation)
+      : rxso2_(rxso2), translation_(translation) {
+    static_assert(std::is_same<typename OtherDerived::Scalar, Scalar>::value,
+                  "must be same Scalar type");
+    static_assert(std::is_same<typename D::Scalar, Scalar>::value,
+                  "must be same Scalar type");
+  }
+
+  // Constructor from complex number and translation vector.
+  //
+  // Precondition: complex number must not be close to zero.
+  //
+  template <class D>
+  SOPHUS_FUNC Sim2(Vector2<Scalar> const& complex_number,
+                   Eigen::MatrixBase<D> const& translation)
+      : rxso2_(complex_number), translation_(translation) {
+    static_assert(std::is_same<typename D::Scalar, Scalar>::value,
+                  "must be same Scalar type");
+  }
+
+  // Constructor from 3x3 matrix
+  //
+  // Precondition: Top-left 2x2 matrix needs to be "scaled-orthogonal" with
+  //               positive determinant. The last row must be (0, 0, 1).
+  //
+  SOPHUS_FUNC explicit Sim2(Matrix<Scalar, 3, 3> const& T)
+      : rxso2_((T.template topLeftCorner<2, 2>()).eval()),
+        translation_(T.template block<2, 1>(0, 2)) {}
+
+  // This provides unsafe read/write access to internal data. Sim(2) is
+  // represented by a complex number (two parameters) and a 2-vector. When
+  // using direct write access, the user needs to take care of that the
+  // complex number is not set close to zero.
+  //
+  SOPHUS_FUNC Scalar* data() {
+    // rxso2_ and translation_ are laid out sequentially with no padding
+    return rxso2_.data();
+  }
+
+  // Const version of data() above.
+  //
+  SOPHUS_FUNC Scalar const* data() const {
+    // rxso2_ and translation_ are laid out sequentially with no padding
+    return rxso2_.data();
+  }
+
+  // Accessor of RxSO2
+  //
+  SOPHUS_FUNC RxSo2Member& rxso2() { return rxso2_; }
+
+  // Mutator of RxSO2
+  //
+  SOPHUS_FUNC RxSo2Member const& rxso2() const { return rxso2_; }
+
+  // Mutator of translation vector
+  //
+  SOPHUS_FUNC TranslationMember& translation() { return translation_; }
+
+  // Accessor of translation vector
+  //
+  SOPHUS_FUNC TranslationMember const& translation() const {
+    return translation_;
+  }
+
+  // Returns derivative of exp(x).matrix() wrt. x_i at x=0.
+  //
+  SOPHUS_FUNC static Transformation Dxi_exp_x_matrix_at_0(int i) {
+    return generator(i);
+  }
 
   // Derivative of Lie bracket with respect to first element.
   //
@@ -280,20 +424,6 @@ class Sim2Base {
   // bracket of the Lie algebra sim(2).
   // See ``lieBracket()`` below.
   //
-  SOPHUS_FUNC static Adjoint d_lieBracketab_by_d_a(Tangent const& b) {
-    Vector2<Scalar> const upsilon2 = b.template head<2>();
-    Scalar const omega2 = b[2];
-    Scalar const sigma2 = b[3];
-
-    Adjoint res;
-    res.setZero();
-    res.template topLeftCorner<2, 2>() =
-        -SO2<Scalar>::hat(omega2) - sigma2 * Matrix2<Scalar>::Identity();
-    res.template block<2, 2>(0, 2) = -SO2<Scalar>::hat(upsilon2);
-    res.template topRightCorner<2, 1>() = upsilon2;
-    res.template block<2, 2>(2, 2) = -SO2<Scalar>::hat(omega2);
-    return res;
-  }
 
   // Group exponential
   //
@@ -400,35 +530,17 @@ class Sim2Base {
     return res;
   }
 
-  // Logarithmic map
+  // Draw uniform sample from Sim(2) manifold.
   //
-  // Computes the logarithm, the inverse of the group exponential which maps
-  // element of the group (rigid body transformations) to elements of the
-  // tangent space (twist).
+  // Translations are drawn component-wise from the range [-1, 1].
+  // The scale factor is drawn uniformly in log2-space from [-1, 1],
+  // hence the scale is in [0.5, 2].
   //
-  // To be specific, this function computes ``vee(logmat(.))`` with
-  // ``logmat(.)`` being the matrix logarithm and ``vee(.)`` the vee-operator
-  // of Sim(2).
-  //
-  SOPHUS_FUNC static Tangent log(Sim2<Scalar> const& other) {
-    // The derivation of the closed-form Sim(2) logarithm for is done
-    // analogously to the closed-form solution of the SE(2) logarithm, see
-    // J. Gallier, D. Xu, "Computing exponentials of skew symmetric matrices and
-    // logarithms of orthogonal matrices", IJRA 2002.
-    // https://pdfs.semanticscholar.org/cfe3/e4b39de63c8cabd89bf3feff7f5449fc981d.pdf
-    // (Sec. 6., pp. 8)
-    Tangent res;
-    Vector2<Scalar> const theta_sigma = RxSO2<Scalar>::log(other.rxso2());
-    Scalar const theta = theta_sigma[0];
-    Scalar const sigma = theta_sigma[1];
-    Matrix2<Scalar> const Omega = SO2<Scalar>::hat(theta);
-    Matrix2<Scalar> const W_inv =
-        details::calcWInv<Scalar, 2>(Omega, theta, sigma, other.scale());
-
-    res.segment(0, 2) = W_inv * other.translation();
-    res[2] = theta;
-    res[3] = sigma;
-    return res;
+  template <class UniformRandomBitGenerator>
+  static Sim2 sampleUniform(UniformRandomBitGenerator& generator) {
+    std::uniform_real_distribution<Scalar> uniform(Scalar(-1), Scalar(1));
+    return Sim2(RxSO2<Scalar>::sampleUniform(generator),
+                Vector2<Scalar>(uniform(generator), uniform(generator)));
   }
 
   // vee-operator
@@ -451,122 +563,24 @@ class Sim2Base {
         RxSO2<Scalar>::vee(Omega.template topLeftCorner<2, 2>());
     return upsilon_omega_sigma;
   }
-};
-
-// Sim2 default type - Constructors and default storage for Sim2 Type.
-template <class Scalar_, int Options>
-class Sim2 : public Sim2Base<Sim2<Scalar_, Options>> {
-  using Base = Sim2Base<Sim2<Scalar_, Options>>;
-
- public:
-  using Scalar = Scalar_;
-  using Transformation = typename Base::Transformation;
-  using Point = typename Base::Point;
-  using Tangent = typename Base::Tangent;
-  using Adjoint = typename Base::Adjoint;
-  using RxSo2Member = RxSO2<Scalar, Options>;
-  using TranslationMember = Vector2<Scalar, Options>;
-
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
-  // Default constructor initialize similiraty transform to the identity.
-  //
-  SOPHUS_FUNC Sim2() : translation_(Vector2<Scalar>::Zero()) {}
-
-  // Copy constructor
-  //
-  template <class OtherDerived>
-  SOPHUS_FUNC Sim2(Sim2Base<OtherDerived> const& other)
-      : rxso2_(other.rxso2()), translation_(other.translation()) {
-    static_assert(std::is_same<typename OtherDerived::Scalar, Scalar>::value,
-                  "must be same Scalar type");
-  }
-
-  // Constructor from RxSO2 and translation vector
-  //
-  template <class OtherDerived, class D>
-  SOPHUS_FUNC Sim2(RxSO2Base<OtherDerived> const& rxso2,
-                   Eigen::MatrixBase<D> const& translation)
-      : rxso2_(rxso2), translation_(translation) {
-    static_assert(std::is_same<typename OtherDerived::Scalar, Scalar>::value,
-                  "must be same Scalar type");
-    static_assert(std::is_same<typename D::Scalar, Scalar>::value,
-                  "must be same Scalar type");
-  }
-
-  // Constructor from complex number and translation vector.
-  //
-  // Precondition: complex number must not be close to zero.
-  //
-  template <class D>
-  SOPHUS_FUNC Sim2(Vector2<Scalar> const& complex_number,
-                   Eigen::MatrixBase<D> const& translation)
-      : rxso2_(complex_number), translation_(translation) {
-    static_assert(std::is_same<typename D::Scalar, Scalar>::value,
-                  "must be same Scalar type");
-  }
-
-  // Constructor from 3x3 matrix
-  //
-  // Precondition: Top-left 2x2 matrix needs to be "scaled-orthogonal" with
-  //               positive determinant. The last row must be (0, 0, 1).
-  //
-  SOPHUS_FUNC explicit Sim2(Matrix<Scalar, 3, 3> const& T)
-      : rxso2_((T.template topLeftCorner<2, 2>()).eval()),
-        translation_(T.template block<2, 1>(0, 2)) {}
-
-  // This provides unsafe read/write access to internal data. Sim(2) is
-  // represented by a complex number (two parameters) and a 2-vector. When
-  // using direct write access, the user needs to take care of that the
-  // complex number is not set close to zero.
-  //
-  SOPHUS_FUNC Scalar* data() {
-    // rxso2_ and translation_ are laid out sequentially with no padding
-    return rxso2_.data();
-  }
-
-  // Const version of data() above.
-  //
-  SOPHUS_FUNC Scalar const* data() const {
-    // rxso2_ and translation_ are laid out sequentially with no padding
-    return rxso2_.data();
-  }
-
-  // Draw uniform sample from Sim(2) manifold.
-  //
-  // Translations are drawn component-wise from the range [-1, 1].
-  // The scale factor is drawn uniformly in log2-space from [-1, 1],
-  // hence the scale is in [0.5, 2].
-  //
-  template <class UniformRandomBitGenerator>
-  static Sim2 sampleUniform(UniformRandomBitGenerator& generator) {
-    std::uniform_real_distribution<Scalar> uniform(Scalar(-1), Scalar(1));
-    return Sim2(RxSO2<Scalar>::sampleUniform(generator),
-                Vector2<Scalar>(uniform(generator), uniform(generator)));
-  }
-
-  // Accessor of RxSO2
-  //
-  SOPHUS_FUNC RxSo2Member& rxso2() { return rxso2_; }
-
-  // Mutator of RxSO2
-  //
-  SOPHUS_FUNC RxSo2Member const& rxso2() const { return rxso2_; }
-
-  // Mutator of translation vector
-  //
-  SOPHUS_FUNC TranslationMember& translation() { return translation_; }
-
-  // Accessor of translation vector
-  //
-  SOPHUS_FUNC TranslationMember const& translation() const {
-    return translation_;
-  }
 
  protected:
   RxSo2Member rxso2_;
   TranslationMember translation_;
 };
+
+template <class Scalar, int Options>
+Sim2<Scalar, Options>::Sim2() : translation_(TranslationMember::Zero()) {
+  static_assert(std::is_standard_layout<Sim2>::value,
+                "Assume standard layout for the use of offsetof check below.");
+  static_assert(
+      offsetof(Sim2, rxso2_) + sizeof(Scalar) * RxSO2<Scalar>::num_parameters ==
+          offsetof(Sim2, translation_),
+      "This class assumes packed storage and hence will only work "
+      "correctly depending on the compiler (options) - in "
+      "particular when using [this->data(), this-data() + "
+      "num_parameters] to access the raw data in a contiguous fashion.");
+}
 
 }  // namespace Sophus
 
@@ -587,7 +601,10 @@ class Map<Sophus::Sim2<Scalar_>, Options>
   using Tangent = typename Base::Tangent;
   using Adjoint = typename Base::Adjoint;
 
+  // LCOV_EXCL_START
   EIGEN_INHERIT_ASSIGNMENT_EQUAL_OPERATOR(Map)
+  // LCOV_EXCL_STOP
+
   using Base::operator*=;
   using Base::operator*;
 
@@ -636,7 +653,6 @@ class Map<Sophus::Sim2<Scalar_> const, Options>
   using Tangent = typename Base::Tangent;
   using Adjoint = typename Base::Adjoint;
 
-  EIGEN_INHERIT_ASSIGNMENT_EQUAL_OPERATOR(Map)
   using Base::operator*=;
   using Base::operator*;
 
@@ -661,6 +677,6 @@ class Map<Sophus::Sim2<Scalar_> const, Options>
   Map<Sophus::RxSO2<Scalar> const, Options> const rxso2_;
   Map<Sophus::Vector2<Scalar> const, Options> const translation_;
 };
-}
+}  // namespace Eigen
 
 #endif

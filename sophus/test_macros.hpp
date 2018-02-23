@@ -37,8 +37,10 @@ void testFailed(bool& passed, char const* func, char const* file, int line,
 
 void processTestResult(bool passed) {
   if (!passed) {
+    // LCOV_EXCL_START
     std::cerr << "failed!" << std::endl << std::endl;
     exit(-1);
+    // LCOV_EXCL_STOP
   }
   std::cerr << "passed." << std::endl << std::endl;
 }
@@ -93,7 +95,7 @@ void processTestResult(bool passed) {
 // The in-out parameter passed will be set to false if test fails.
 #define SOPHUS_TEST_APPROX(passed, left, right, thr, ...)                      \
   do {                                                                         \
-    auto nrm = Sophus::metric((left), (right));                                \
+    auto nrm = Sophus::maxMetric((left), (right));                             \
     if (!(nrm < (thr))) {                                                      \
       std::string msg = Sophus::details::FormatString(                         \
           "% (=%) is not approx % (=%); % is %; nrm is %\n",                   \
@@ -111,7 +113,7 @@ void processTestResult(bool passed) {
 // The in-out parameter passed will be set to false if test fails.
 #define SOPHUS_TEST_NOT_APPROX(passed, left, right, thr, ...)                  \
   do {                                                                         \
-    auto nrm = Sophus::metric((left), (right));                                \
+    auto nrm = Sophus::maxMetric((left), (right));                             \
     if (nrm < (thr)) {                                                         \
       std::string msg = Sophus::details::FormatString(                         \
           "% (=%) is approx % (=%), but it should not!\n % is %; nrm is %\n",  \

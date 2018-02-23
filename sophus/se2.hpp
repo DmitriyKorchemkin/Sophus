@@ -96,6 +96,28 @@ class SE2Base {
                               translation().template cast<NewScalarType>());
   }
 
+  // Returns derivative of  this * exp(x)  wrt x at x=0.
+  //
+  SOPHUS_FUNC Matrix<Scalar, DoF, num_parameters> Dx_this_mul_exp_x_at_0()
+      const {
+    Matrix<Scalar, DoF, num_parameters> J;
+    Sophus::Vector2<Scalar> const c = unit_complex();
+    Scalar o(0);
+    J(0, 0) = o;
+    J(0, 1) = o;
+    J(0, 2) = c[0];
+    J(0, 3) = c[1];
+    J(1, 0) = o;
+    J(1, 1) = o;
+    J(1, 2) = -c[1];
+    J(1, 3) = c[0];
+    J(2, 0) = -c[1];
+    J(2, 1) = c[0];
+    J(2, 2) = o;
+    J(2, 3) = o;
+    return J;
+  }
+
   // Returns group inverse.
   //
   SOPHUS_FUNC SE2<Scalar> inverse() const {
@@ -105,9 +127,37 @@ class SE2Base {
 
   // Logarithmic map
   //
-  // Returns tangent space representation (= twist) of the instance.
+  // Computes the logarithm, the inverse of the group exponential which maps
+  // element of the group (rigid body transformations) to elements of the
+  // tangent space (twist).
   //
-  SOPHUS_FUNC Tangent log() const { return log(*this); }
+  // To be specific, this function computes ``vee(logmat(.))`` with
+  // ``logmat(.)`` being the matrix logarithm and ``vee(.)`` the vee-operator
+  // of SE(2).
+  //
+  SOPHUS_FUNC Tangent log() const {
+    using std::abs;
+
+    Tangent upsilon_theta;
+    Scalar theta = so2().log();
+    upsilon_theta[2] = theta;
+    Scalar halftheta = Scalar(0.5) * theta;
+    Scalar halftheta_by_tan_of_halftheta;
+
+    Vector2<Scalar> z = so2().unit_complex();
+    Scalar real_minus_one = z.x() - Scalar(1.);
+    if (abs(real_minus_one) < Constants<Scalar>::epsilon()) {
+      halftheta_by_tan_of_halftheta =
+          Scalar(1.) - Scalar(1. / 12) * theta * theta;
+    } else {
+      halftheta_by_tan_of_halftheta = -(halftheta * z.y()) / (real_minus_one);
+    }
+    Matrix<Scalar, 2, 2> V_inv;
+    V_inv << halftheta_by_tan_of_halftheta, halftheta, -halftheta,
+        halftheta_by_tan_of_halftheta;
+    upsilon_theta.template head<2>() = V_inv * translation();
+    return upsilon_theta;
+  }
 
   /**
    * \brief Normalize SO2 element
@@ -144,6 +194,10 @@ class SE2Base {
   }
 
   // Assignment operator.
+  //
+  SOPHUS_FUNC SE2Base& operator=(SE2Base const& other) = default;
+
+  // Assignment-like operator from OtherDerived.
   //
   template <class OtherDerived>
   SOPHUS_FUNC SE2Base<Derived>& operator=(SE2Base<OtherDerived> const& other) {
@@ -190,6 +244,17 @@ class SE2Base {
     translation() += so2() * (other.translation());
     so2() *= other.so2();
     return *this;
+  }
+
+  // Returns internal parameters of SE(2).
+  //
+  // It returns (c[0], c[1], t[0], t[1]),
+  // with c being the unit complex number, t the translation 3-vector.
+  //
+  SOPHUS_FUNC Sophus::Vector<Scalar, num_parameters> params() const {
+    Sophus::Vector<Scalar, num_parameters> p;
+    p << so2().params(), translation();
+    return p;
   }
 
   // Returns rotation matrix.
@@ -251,27 +316,193 @@ class SE2Base {
   unit_complex() const {
     return so2().unit_complex();
   }
+};
 
-  ////////////////////////////////////////////////////////////////////////////
-  // public static functions
-  ////////////////////////////////////////////////////////////////////////////
+// SE2 default type - Constructors and default storage for SE3 Type.
+template <class Scalar_, int Options>
+class SE2 : public SE2Base<SE2<Scalar_, Options>> {
+  using Base = SE2Base<SE2<Scalar_, Options>>;
 
-  // Derivative of Lie bracket with respect to first element.
+ public:
+  static int constexpr DoF = Base::DoF;
+  static int constexpr num_parameters = Base::num_parameters;
+
+  using Scalar = Scalar_;
+  using Transformation = typename Base::Transformation;
+  using Point = typename Base::Point;
+  using Tangent = typename Base::Tangent;
+  using Adjoint = typename Base::Adjoint;
+  using SO2Member = SO2<Scalar, Options>;
+  using TranslationMember = Vector2<Scalar, Options>;
+
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+  // Default constructor initialize rigid body motion to the identity.
   //
-  // This function returns ``D_a [a, b]`` with ``D_a`` being the
-  // differential operator with respect to ``a``, ``[a, b]`` being the lie
-  // bracket of the Lie algebra se3.
-  // See ``lieBracket()`` below.
-  //
-  SOPHUS_FUNC static Transformation d_lieBracketab_by_d_a(Tangent const& b) {
-    static Scalar const zero = Scalar(0);
-    Vector2<Scalar> upsilon2 = b.template head<2>();
-    Scalar theta2 = b[2];
+  SOPHUS_FUNC SE2();
 
-    Transformation res;
-    res << zero, theta2, -upsilon2[1], -theta2, zero, upsilon2[0], zero, zero,
-        zero;
-    return res;
+  // Copy constructor
+  //
+  SOPHUS_FUNC SE2(SE2 const& other) = default;
+
+  // Copy-like constructor from OtherDerived
+  //
+  template <class OtherDerived>
+  SOPHUS_FUNC SE2(SE2Base<OtherDerived> const& other)
+      : so2_(other.so2()), translation_(other.translation()) {
+    static_assert(std::is_same<typename OtherDerived::Scalar, Scalar>::value,
+                  "must be same Scalar type");
+  }
+
+  // Constructor from SO3 and translation vector
+  //
+  template <class OtherDerived, class D>
+  SOPHUS_FUNC SE2(SO2Base<OtherDerived> const& so2,
+                  Eigen::MatrixBase<D> const& translation)
+      : so2_(so2), translation_(translation) {
+    static_assert(std::is_same<typename OtherDerived::Scalar, Scalar>::value,
+                  "must be same Scalar type");
+    static_assert(std::is_same<typename D::Scalar, Scalar>::value,
+                  "must be same Scalar type");
+  }
+
+  // Constructor from rotation matrix and translation vector
+  //
+  // Precondition: Rotation matrix needs to be orthogonal with determinant of 1.
+  //
+  SOPHUS_FUNC
+  SE2(typename SO2<Scalar>::Transformation const& rotation_matrix,
+      Point const& translation)
+      : so2_(rotation_matrix), translation_(translation) {}
+
+  // Constructor from rotation angle and translation vector.
+  //
+  SOPHUS_FUNC SE2(Scalar const& theta, Point const& translation)
+      : so2_(theta), translation_(translation) {}
+
+  // Constructor from complex number and translation vector
+  //
+  // Precondition: ``complex` must not be close to zero.
+  SOPHUS_FUNC SE2(Vector2<Scalar> const& complex, Point const& translation)
+      : so2_(complex), translation_(translation) {}
+
+  // Constructor from 3x3 matrix
+  //
+  // Precondition: Rotation matrix needs to be orthogonal with determinant of 1.
+  //               The last row must be (0, 0, 1).
+  //
+  SOPHUS_FUNC explicit SE2(Transformation const& T)
+      : so2_(T.template topLeftCorner<2, 2>().eval()),
+        translation_(T.template block<2, 1>(0, 2)) {}
+
+  // This provides unsafe read/write access to internal data. SO(2) is
+  // represented by a complex number (two parameters). When using direct write
+  // access, the user needs to take care of that the complex number stays
+  // normalized.
+  //
+  SOPHUS_FUNC Scalar* data() {
+    // so2_ and translation_ are layed out sequentially with no padding
+    return so2_.data();
+  }
+
+  // Const version of data() above.
+  //
+  SOPHUS_FUNC Scalar const* data() const {
+    // so2_ and translation_ are layed out sequentially with no padding
+    return so2_.data();
+  }
+
+  // Accessor of SO3
+  //
+  SOPHUS_FUNC SO2Member& so2() { return so2_; }
+
+  // Mutator of SO3
+  //
+  SOPHUS_FUNC SO2Member const& so2() const { return so2_; }
+
+  // Mutator of translation vector
+  //
+  SOPHUS_FUNC TranslationMember& translation() { return translation_; }
+
+  // Accessor of translation vector
+  //
+  SOPHUS_FUNC TranslationMember const& translation() const {
+    return translation_;
+  }
+
+  // Returns derivative of exp(x) wrt. x.
+  //
+  SOPHUS_FUNC static Sophus::Matrix<Scalar, DoF, num_parameters> Dx_exp_x(
+      Tangent const& upsilon_theta) {
+    using std::abs;
+    using std::cos;
+    using std::pow;
+    using std::sin;
+    Sophus::Matrix<Scalar, DoF, num_parameters> J;
+    Sophus::Vector<Scalar, 2> upsilon = upsilon_theta.template head<2>();
+    Scalar theta = upsilon_theta[2];
+
+    if (abs(theta) < Constants<Scalar>::epsilon()) {
+      Scalar const o(0);
+      Scalar const i(1);
+
+      // clang-format off
+      J << o, o, i, o,
+           o, o, o, i,
+           o, i, -Scalar(0.5) * upsilon[1], Scalar(0.5) * upsilon[0];
+      // clang-format on
+      return J;
+    }
+
+    Scalar const c0 = sin(theta);
+    Scalar const c1 = Scalar(1.0) / theta;
+    Scalar const c2 = c0 * c1;
+    Scalar const c3 = cos(theta);
+    Scalar const c4 = -c3 + Scalar(1);
+    Scalar const c5 = c1 * c4;
+    Scalar const c6 = c1 * c3;
+    Scalar const c7 = pow(theta, -2);
+    Scalar const c8 = c0 * c7;
+    Scalar const c9 = c4 * c7;
+
+    Scalar const o = Scalar(0);
+    J(0, 0) = o;
+    J(0, 1) = o;
+    J(0, 2) = c2;
+    J(0, 3) = c5;
+    J(1, 0) = o;
+    J(1, 1) = o;
+    J(1, 2) = -c5;
+    J(1, 3) = c2;
+    J(2, 0) = -c0;
+    J(2, 1) = c3;
+    J(2, 2) =
+        -c2 * upsilon[1] + c6 * upsilon[0] - c8 * upsilon[0] + c9 * upsilon[1];
+    J(2, 3) =
+        c2 * upsilon[0] + c6 * upsilon[1] - c8 * upsilon[1] - c9 * upsilon[0];
+    return J;
+  }
+
+  // Returns derivative of exp(x) wrt. x_i at x=0.
+  //
+  SOPHUS_FUNC static Sophus::Matrix<Scalar, DoF, num_parameters>
+  Dx_exp_x_at_0() {
+    Sophus::Matrix<Scalar, DoF, num_parameters> J;
+    Scalar const o(0);
+    Scalar const i(1);
+
+    // clang-format off
+    J << o, o, i, o,
+         o, o, o, i,
+         o, i, o, o;
+    // clang-format on
+    return J;
+  }
+
+  // Returns derivative of exp(x).matrix() wrt. x_i at x=0.
+  //
+  SOPHUS_FUNC static Transformation Dxi_exp_x_matrix_at_0(int i) {
+    return generator(i);
   }
 
   // Group exponential
@@ -291,8 +522,9 @@ class SE2Base {
     SO2<Scalar> so2 = SO2<Scalar>::exp(theta);
     Scalar sin_theta_by_theta;
     Scalar one_minus_cos_theta_by_theta;
+    using std::abs;
 
-    if (std::abs(theta) < Constants<Scalar>::epsilon()) {
+    if (abs(theta) < Constants<Scalar>::epsilon()) {
       Scalar theta_sq = theta * theta;
       sin_theta_by_theta = Scalar(1.) - Scalar(1. / 6.) * theta_sq;
       one_minus_cos_theta_by_theta =
@@ -306,6 +538,15 @@ class SE2Base {
         sin_theta_by_theta * a[0] - one_minus_cos_theta_by_theta * a[1],
         one_minus_cos_theta_by_theta * a[0] + sin_theta_by_theta * a[1]);
     return SE2<Scalar>(so2, trans);
+  }
+
+  // Returns closest SE3 given arbirary 4x4 matrix.
+  //
+  template <class S = Scalar>
+  static SOPHUS_FUNC enable_if_t<std::is_floating_point<S>::value, SE2>
+  fitToSE2(Matrix3<Scalar> const& T) {
+    return SE2(SO2<Scalar>::fitToSO2(T.template block<2, 2>(0, 0)),
+               T.template block<2, 1>(0, 2));
   }
 
   // Returns the ith infinitesimal generators of SE(2).
@@ -371,37 +612,40 @@ class SE2Base {
                    theta1 * upsilon2[0] - theta2 * upsilon1[0], Scalar(0));
   }
 
-  // Logarithmic map
+  // Construct pure rotation.
   //
-  // Computes the logarithm, the inverse of the group exponential which maps
-  // element of the group (rigid body transformations) to elements of the
-  // tangent space (twist).
-  //
-  // To be specific, this function computes ``vee(logmat(.))`` with
-  // ``logmat(.)`` being the matrix logarithm and ``vee(.)`` the vee-operator
-  // of SE(2).
-  //
-  SOPHUS_FUNC static Tangent log(SE2<Scalar> const& other) {
-    Tangent upsilon_theta;
-    SO2<Scalar> const& so2 = other.so2();
-    Scalar theta = SO2<Scalar>::log(so2);
-    upsilon_theta[2] = theta;
-    Scalar halftheta = Scalar(0.5) * theta;
-    Scalar halftheta_by_tan_of_halftheta;
+  static SOPHUS_FUNC SE2 rot(Scalar const& x) {
+    return SE2(SO2<Scalar>(x), Sophus::Vector2<Scalar>::Zero());
+  }
 
-    Vector2<Scalar> const& z = so2.unit_complex();
-    Scalar real_minus_one = z.x() - Scalar(1.);
-    if (std::abs(real_minus_one) < Constants<Scalar>::epsilon()) {
-      halftheta_by_tan_of_halftheta =
-          Scalar(1.) - Scalar(1. / 12) * theta * theta;
-    } else {
-      halftheta_by_tan_of_halftheta = -(halftheta * z.y()) / (real_minus_one);
-    }
-    Matrix<Scalar, 2, 2> V_inv;
-    V_inv << halftheta_by_tan_of_halftheta, halftheta, -halftheta,
-        halftheta_by_tan_of_halftheta;
-    upsilon_theta.template head<2>() = V_inv * other.translation();
-    return upsilon_theta;
+  // Draw uniform sample from SE(2) manifold.
+  //
+  // Translations are drawn component-wise from the range [-1, 1].
+  //
+  template <class UniformRandomBitGenerator>
+  static SE2 sampleUniform(UniformRandomBitGenerator& generator) {
+    std::uniform_real_distribution<Scalar> uniform(Scalar(-1), Scalar(1));
+    return SE2(SO2<Scalar>::sampleUniform(generator),
+               Vector2<Scalar>(uniform(generator), uniform(generator)));
+  }
+
+  // Construct a translation only SE(2) instance.
+  //
+  template <class T0, class T1>
+  static SOPHUS_FUNC SE2 trans(T0 const& x, T1 const& y) {
+    return SE2(SO2<Scalar>(), Vector2<Scalar>(x, y));
+  }
+
+  // Contruct x-axis translation.
+  //
+  static SOPHUS_FUNC SE2 transX(Scalar const& x) {
+    return SE2::trans(x, Scalar(0));
+  }
+
+  // Contruct y-axis translation.
+  //
+  static SOPHUS_FUNC SE2 transY(Scalar const& y) {
+    return SE2::trans(Scalar(0), y);
   }
 
   // vee-operator
@@ -426,162 +670,26 @@ class SE2Base {
     upsilon_omega[2] = SO2<Scalar>::vee(Omega.template topLeftCorner<2, 2>());
     return upsilon_omega;
   }
-};
-
-// SE2 default type - Constructors and default storage for SE3 Type.
-template <class Scalar_, int Options>
-class SE2 : public SE2Base<SE2<Scalar_, Options>> {
-  using Base = SE2Base<SE2<Scalar_, Options>>;
-
- public:
-  using Scalar = Scalar_;
-  using Transformation = typename Base::Transformation;
-  using Point = typename Base::Point;
-  using Tangent = typename Base::Tangent;
-  using Adjoint = typename Base::Adjoint;
-  using SO2Member = SO2<Scalar, Options>;
-  using TranslationMember = Vector2<Scalar, Options>;
-
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
-  // Default constructor initialize rigid body motion to the identity.
-  //
-  SOPHUS_FUNC SE2() : translation_(Vector2<Scalar>::Zero()) {}
-
-  // Copy constructor
-  //
-  template <class OtherDerived>
-  SOPHUS_FUNC SE2(SE2Base<OtherDerived> const& other)
-      : so2_(other.so2()), translation_(other.translation()) {
-    static_assert(std::is_same<typename OtherDerived::Scalar, Scalar>::value,
-                  "must be same Scalar type");
-  }
-
-  // Constructor from SO3 and translation vector
-  //
-  template <class OtherDerived, class D>
-  SOPHUS_FUNC SE2(SO2Base<OtherDerived> const& so2,
-                  Eigen::MatrixBase<D> const& translation)
-      : so2_(so2), translation_(translation) {
-    static_assert(std::is_same<typename OtherDerived::Scalar, Scalar>::value,
-                  "must be same Scalar type");
-    static_assert(std::is_same<typename D::Scalar, Scalar>::value,
-                  "must be same Scalar type");
-  }
-
-  // Constructor from rotation matrix and translation vector
-  //
-  // Precondition: Rotation matrix needs to be orthogonal with determinant of 1.
-  //
-  SOPHUS_FUNC
-  SE2(typename SO2<Scalar>::Transformation const& rotation_matrix,
-      Point const& translation)
-      : so2_(rotation_matrix), translation_(translation) {}
-
-  // Constructor from rotation angle and translation vector.
-  //
-  SOPHUS_FUNC SE2(Scalar const& theta, Point const& translation)
-      : so2_(theta), translation_(translation) {}
-
-  // Constructor from complex number and translation vector
-  //
-  // Precondition: ``complex` must not be close to zero.
-  SOPHUS_FUNC SE2(Vector2<Scalar> const& complex, Point const& translation)
-      : so2_(complex), translation_(translation) {}
-
-  // Constructor from 3x3 matrix
-  //
-  // Precondition: Rotation matrix needs to be orthogonal with determinant of 1.
-  //               The last row must be (0, 0, 1).
-  //
-  SOPHUS_FUNC explicit SE2(Transformation const& T)
-      : so2_(T.template topLeftCorner<2, 2>().eval()),
-        translation_(T.template block<2, 1>(0, 2)) {}
-
-  // Returns closest SE3 given arbirary 4x4 matrix.
-  //
-  SOPHUS_FUNC static SE2 fitToSE2(Matrix3<Scalar> const& T) {
-    return SE2(SO2<Scalar>::fitToSO2(T.template block<2, 2>(0, 0)),
-               T.template block<2, 1>(0, 2));
-  }
-
-  // Construct a translation only SE3 instance.
-  //
-  template <class T0, class T1>
-  static SOPHUS_FUNC SE2 trans(T0 const& x, T1 const& y) {
-    return SE2(SO2<Scalar>(), Vector2<Scalar>(x, y));
-  }
-
-  // Contruct x-axis translation.
-  //
-  static SOPHUS_FUNC SE2 transX(Scalar const& x) {
-    return SE2::trans(x, Scalar(0));
-  }
-
-  // Contruct y-axis translation.
-  //
-  static SOPHUS_FUNC SE2 transY(Scalar const& y) {
-    return SE2::trans(Scalar(0), y);
-  }
-
-  // Contruct pure rotation.
-  //
-  static SOPHUS_FUNC SE2 rot(Scalar const& x) {
-    return SE2(SO2<Scalar>(x), Sophus::Vector2<Scalar>::Zero());
-  }
-
-  // This provides unsafe read/write access to internal data. SO(2) is
-  // represented by a complex number (two parameters). When using direct write
-  // access, the user needs to take care of that the complex number stays
-  // normalized.
-  //
-  SOPHUS_FUNC Scalar* data() {
-    // so2_ and translation_ are layed out sequentially with no padding
-    return so2_.data();
-  }
-
-  // Const version of data() above.
-  //
-  SOPHUS_FUNC Scalar const* data() const {
-    // so2_ and translation_ are layed out sequentially with no padding
-    return so2_.data();
-  }
-
-  // Draw uniform sample from SE(3) manifold.
-  //
-  // Translations are drawn component-wise from the range [-1, 1].
-  //
-  template <class UniformRandomBitGenerator>
-  static SE2 sampleUniform(UniformRandomBitGenerator& generator) {
-    std::uniform_real_distribution<Scalar> uniform(Scalar(-1), Scalar(1));
-    return SE2(SO2<Scalar>::sampleUniform(generator),
-               Vector2<Scalar>(uniform(generator), uniform(generator)));
-  }
-
-  // Accessor of SO3
-  //
-  SOPHUS_FUNC SO2Member& so2() { return so2_; }
-
-  // Mutator of SO3
-  //
-  SOPHUS_FUNC SO2Member const& so2() const { return so2_; }
-
-  // Mutator of translation vector
-  //
-  SOPHUS_FUNC TranslationMember& translation() { return translation_; }
-
-  // Accessor of translation vector
-  //
-  SOPHUS_FUNC TranslationMember const& translation() const {
-    return translation_;
-  }
 
  protected:
   SO2Member so2_;
   TranslationMember translation_;
 };
 
-}  // end namespace
+template <class Scalar, int Options>
+SE2<Scalar, Options>::SE2() : translation_(TranslationMember::Zero()) {
+  static_assert(std::is_standard_layout<SE2>::value,
+                "Assume standard layout for the use of offsetof check below.");
+  static_assert(
+      offsetof(SE2, so2_) + sizeof(Scalar) * SO2<Scalar>::num_parameters ==
+          offsetof(SE2, translation_),
+      "This class assumes packed storage and hence will only work "
+      "correctly depending on the compiler (options) - in "
+      "particular when using [this->data(), this-data() + "
+      "num_parameters] to access the raw data in a contiguous fashion.");
+}
+
+}  // namespace Sophus
 
 namespace Eigen {
 
@@ -600,7 +708,10 @@ class Map<Sophus::SE2<Scalar_>, Options>
   using Tangent = typename Base::Tangent;
   using Adjoint = typename Base::Adjoint;
 
+  // LCOV_EXCL_START
   EIGEN_INHERIT_ASSIGNMENT_EQUAL_OPERATOR(Map)
+  // LCOV_EXCL_STOP
+
   using Base::operator*=;
   using Base::operator*;
 
@@ -651,7 +762,6 @@ class Map<Sophus::SE2<Scalar_> const, Options>
   using Tangent = typename Base::Tangent;
   using Adjoint = typename Base::Adjoint;
 
-  EIGEN_INHERIT_ASSIGNMENT_EQUAL_OPERATOR(Map)
   using Base::operator*=;
   using Base::operator*;
 
@@ -676,6 +786,6 @@ class Map<Sophus::SE2<Scalar_> const, Options>
   Map<Sophus::SO2<Scalar> const, Options> const so2_;
   Map<Sophus::Vector2<Scalar> const, Options> const translation_;
 };
-}
+}  // namespace Eigen
 
 #endif
