@@ -238,15 +238,17 @@ class RxSO3Base {
   SOPHUS_FUNC RxSO3Product<OtherDerived> operator*(
       RxSO3Base<OtherDerived> const& other) const {
     using ResultT = ReturnScalar<OtherDerived>;
-    typename RxSO3Product<OtherDerived>::QuaternionType result_quaternion(
-        quaternion() * other.quaternion());
+    using QuaternionProductType = typename RxSO3Product<OtherDerived>::QuaternionType;
+
+    QuaternionProductType result_quaternion(
+        Sophus::SO3<double>::QuaternionProduct<QuaternionProductType>(quaternion(), other.quaternion()));
 
     ResultT scale = result_quaternion.squaredNorm();
     if (scale < Constants<ResultT>::epsilon()) {
       SOPHUS_ENSURE(scale > ResultT(0), "Scale must be greater zero.");
       /// Saturation to ensure class invariant.
       result_quaternion.normalize();
-      result_quaternion.coeffs() *= sqrt(Constants<Scalar>::epsilon());
+      result_quaternion.coeffs() *= ResultT(sqrt(Constants<Scalar>::epsilon()));
     }
     return RxSO3Product<OtherDerived>(result_quaternion);
   }
