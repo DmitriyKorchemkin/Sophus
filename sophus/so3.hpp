@@ -135,7 +135,7 @@ class SO3Base {
   SOPHUS_FUNC enable_if_t<std::is_floating_point<S>::value, S> angleX() const {
     Sophus::Matrix3<Scalar> R = matrix();
     Sophus::Matrix2<Scalar> Rx = R.template block<2, 2>(1, 1);
-    return SO2<Scalar>(makeRotationMatrix(Rx)).log();
+    return SO2<Scalar>(makeRotationMatrix(Rx)).log()[0];
   }
 
   /// Extract rotation angle about canonical Y-axis
@@ -149,7 +149,7 @@ class SO3Base {
       R(0, 0), R(2, 0),
       R(0, 2), R(2, 2);
     // clang-format on
-    return SO2<Scalar>(makeRotationMatrix(Ry)).log();
+    return SO2<Scalar>(makeRotationMatrix(Ry)).log()[0];
   }
 
   /// Extract rotation angle about canonical Z-axis
@@ -158,7 +158,7 @@ class SO3Base {
   SOPHUS_FUNC enable_if_t<std::is_floating_point<S>::value, S> angleZ() const {
     Sophus::Matrix3<Scalar> R = matrix();
     Sophus::Matrix2<Scalar> Rz = R.template block<2, 2>(0, 0);
-    return SO2<Scalar>(makeRotationMatrix(Rz)).log();
+    return SO2<Scalar>(makeRotationMatrix(Rz)).log()[0];
   }
 
   /// Returns copy of instance casted to NewScalarType.

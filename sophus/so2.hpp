@@ -95,7 +95,7 @@ class SO2Base {
   using Point = Vector2<Scalar>;
   using HomogeneousPoint = Vector3<Scalar>;
   using Line = ParametrizedLine2<Scalar>;
-  using Tangent = Scalar;
+  using Tangent = Vector1<Scalar>;
   using Adjoint = Scalar;
 
   /// For binary operations the return type is determined with the
@@ -159,9 +159,9 @@ class SO2Base {
   /// ``logmat(.)`` being the matrix logarithm and ``vee(.)`` the vee-operator
   /// of SO(2).
   ///
-  SOPHUS_FUNC Scalar log() const {
+  SOPHUS_FUNC Tangent log() const {
     using std::atan2;
-    return atan2(unit_complex().y(), unit_complex().x());
+    return Tangent(atan2(unit_complex().y(), unit_complex().x()));
   }
 
   /// It re-normalizes ``unit_complex`` to unit length.
@@ -422,6 +422,9 @@ class SO2 : public SO2Base<SO2<Scalar_, Options>> {
   /// hat()-operator of SO(2).
   ///
   SOPHUS_FUNC static SO2<Scalar> exp(Tangent const& theta) {
+    return exp(theta[0]);
+  }
+  SOPHUS_FUNC static SO2<Scalar> exp(Scalar const& theta) {
     using std::cos;
     using std::sin;
     return SO2<Scalar>(cos(theta), sin(theta));
@@ -431,6 +434,10 @@ class SO2 : public SO2Base<SO2<Scalar_, Options>> {
   ///
   SOPHUS_FUNC static Sophus::Matrix<Scalar, num_parameters, DoF> Dx_exp_x(
       Tangent const& theta) {
+    return Dx_exp_x(theta[0]);
+  }
+  SOPHUS_FUNC static Sophus::Matrix<Scalar, num_parameters, DoF> Dx_exp_x(
+      Scalar const& theta) {
     using std::cos;
     using std::sin;
     return Sophus::Matrix<Scalar, num_parameters, DoF>(-sin(theta), cos(theta));
@@ -472,6 +479,9 @@ class SO2 : public SO2Base<SO2<Scalar_, Options>> {
   /// The corresponding inverse is the vee()-operator, see below.
   ///
   SOPHUS_FUNC static Transformation hat(Tangent const& theta) {
+    return hat(theta[0]);
+  }
+  SOPHUS_FUNC static Transformation hat(Scalar const& theta) {
     Transformation Omega;
     // clang-format off
     Omega <<
@@ -495,7 +505,7 @@ class SO2 : public SO2Base<SO2<Scalar_, Options>> {
   /// the Lie bracket is simple ``0``.
   ///
   SOPHUS_FUNC static Tangent lieBracket(Tangent const&, Tangent const&) {
-    return Scalar(0);
+    return Tangent::Zero();
   }
 
   /// Draw uniform sample from SO(2) manifold.
@@ -523,7 +533,7 @@ class SO2 : public SO2Base<SO2<Scalar_, Options>> {
   ///
   SOPHUS_FUNC static Tangent vee(Transformation const& Omega) {
     using std::abs;
-    return Omega(1, 0);
+    return Tangent(Omega(1, 0));
   }
 
  protected:

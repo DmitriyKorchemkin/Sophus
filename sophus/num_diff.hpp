@@ -52,6 +52,7 @@ class VectorField {
   }
 };
 
+#if 0
 template <class Scalar, int N>
 class VectorField<Scalar, N, 1> {
  public:
@@ -61,6 +62,7 @@ class VectorField<Scalar, N, 1> {
     return details::Curve<Scalar>::num_diff(std::move(vector_field), a, eps);
   }
 };
+#endif
 }  // namespace details
 
 /// Calculates the derivative of a curve at a point ``t``.

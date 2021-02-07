@@ -126,7 +126,7 @@ class RxSO2Base {
 
   /// Returns rotation angle.
   ///
-  SOPHUS_FUNC Scalar angle() const { return SO2<Scalar>(complex()).log(); }
+  SOPHUS_FUNC Scalar angle() const { return SO2<Scalar>(complex()).log()[0]; }
 
   /// Returns copy of instance casted to NewScalarType.
   ///
@@ -172,7 +172,7 @@ class RxSO2Base {
     using std::log;
     Tangent theta_sigma;
     theta_sigma[1] = log(scale());
-    theta_sigma[0] = SO2<Scalar>(complex()).log();
+    theta_sigma[0] = SO2<Scalar>(complex()).log()[0];
     return theta_sigma;
   }
 

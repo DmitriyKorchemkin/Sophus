@@ -75,7 +75,7 @@ average(SequenceContainer const& foo_Ts_bar) {
   SO2<Scalar> foo_T_average = foo_Ts_bar.front();
   Scalar w = Scalar(1. / N);
 
-  Scalar average(0);
+  typename SO2<Scalar>::Tangent average(0);
   for (SO2<Scalar> const& foo_T_bar : foo_Ts_bar) {
     average += w * (foo_T_average.inverse() * foo_T_bar).log();
   }
